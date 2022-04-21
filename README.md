@@ -35,8 +35,8 @@ Developers
 | :---: | :---: | :---: |
 
 Manager
-| [<img src="https://github.com/ppeigne.png?size=85" width=85><br><sub>Pierre Peigné</sub>](https://github.com/ppeigne) | [<img src="https://github.com/Mikatech.png?size=85" width=85><br><sub>Mikaël Vallenet</sub>](https://github.com/Mikatech)
-| :---: | :---: |
+| [<img src="https://github.com/ppeigne.png?size=85" width=85><br><sub>Pierre Peigné</sub>](https://github.com/ppeigne) | [<img src="https://github.com/Mikatech.png?size=85" width=85><br><sub>Mikaël Vallenet</sub>](https://github.com/Mikatech) |  [<img src="https://github.com/ezalos.png?size=85" width=85><br><sub>Louis Develle</sub>](https://github.com/ezalos)
+| :---: | :---: | :---: |
 
 
 > :rocket: Don't hesitate to follow us on our different networks, and put a star 🌟 on `AI-2-The-Sky's` repositories

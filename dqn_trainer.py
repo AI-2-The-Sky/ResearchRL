@@ -15,6 +15,8 @@ import os
 
 ### UTILS ###
 
+default_4x4_lake_map = [ "SFFF", "FHFH", "FFFH", "HFFG" ]
+
 def random_4x4_lake_map():
     return frozen_lake.generate_random_map(size=4, p=torch.rand(1).item())
 
@@ -30,27 +32,6 @@ def lake_map_to_tensor(lake_map):
 
 def rand_action():
     return math.trunc(torch.rand(1).item() * 4)
-
-default_4x4_lake_map = [ "SFFF", "FHFH", "FFFH", "HFFG" ]
-
-### MODEL ###
-
-# model for 4x4 grids
-class Model00(nn.Module):
-    def __init__(self):
-        super(Model00, self).__init__()
-        self.dense = nn.Sequential(
-             nn.Linear(17, 128),
-             nn.ReLU(),
-             nn.Linear(128, 32),
-             nn.ReLU(),
-             nn.Linear(32, 4)
-        )
-
-    def forward(self, state, lake_tensor):
-        x = torch.cat((torch.as_tensor([state]), lake_tensor))
-        x = self.dense(x)
-        return x
 
 
 ### TRAINER ###
@@ -198,8 +179,8 @@ class MyTrainer():
         self.write_success_rate(rewards/1000)
 
     def create_folder(self) :
-        if not os.path.exists("data/" + self.folder):
-            os.makedirs("data/" + self.folder)
+        if not os.path.exists("dqn-trainer-data/" + self.folder):
+            os.makedirs("dqn-trainer-data/" + self.folder)
 
     def write_hyperparams(self) :
         try :
@@ -227,39 +208,62 @@ class MyTrainer():
             "minibatch_size": self.minibatch_size
         }
         json_object = json.dumps(parameters, indent = 4)
-        with open("data/" + self.folder + "/hyperparameters.json", "w") as outfile:
+        with open("dqn-trainer-data/" + self.folder + "/hyperparameters.json", "w") as outfile:
             outfile.write(json_object)
 
     def write_training_results(self, rewards) :
-        with open("data/" + self.folder + '/training.csv', 'w') as csvfile:
+        with open("dqn-trainer-data/" + self.folder + '/training.csv', 'w') as csvfile:
             columns = ['total training runs', 'avg reward over last 100 training runs']
             writer = csv.DictWriter(csvfile, fieldnames = columns)
             writer.writeheader()
             writer.writerows(rewards)
 
     def write_params(self) :
-        torch.save(self.model.state_dict(), "data/" + self.folder + "/parameters.torch")
+        torch.save(self.model.state_dict(), "dqn-trainer-data/" + self.folder + "/parameters.torch")
 
     def write_success_rate(self, rate) :
-        with open("data/" + self.folder + "/success_rate.txt", "w") as outfile:
+        with open("dqn-trainer-data/" + self.folder + "/success_rate.txt", "w") as outfile:
             outfile.write(str(rate))
 
 
-### MAIN ###
 
-if __name__ == "__main__":
+# commented to do fast iterations in jupyter noteboks (ex: staeter-FL.ipynb)
 
-    param_dict = {
-        "is_slippery" : True,
-        "randomize_lake_map" : False,
-        "discount" : 0.9,
-        "epsylon" : 0.01,
-        "hundred_runs" : 5,
-        "replay_memory_max_size" : 2000,
-        "replay_regularity" : 20,
-        "model" : Model00(),
-        "loss_fn" : nn.MSELoss(),
-        "minibatch_size" : 32,
-        "output_folder" : None
-    }
-    MyTrainer(**param_dict).run()
+# ### MODEL ###
+
+# # model for 4x4 grids
+# class Model00(nn.Module):
+#     def __init__(self):
+#         super(Model00, self).__init__()
+#         self.dense = nn.Sequential(
+#              nn.Linear(17, 128),
+#              nn.ReLU(),
+#              nn.Linear(128, 32),
+#              nn.ReLU(),
+#              nn.Linear(32, 4)
+#         )
+
+#     def forward(self, state, lake_tensor):
+#         x = torch.cat((torch.as_tensor([state]), lake_tensor))
+#         x = self.dense(x)
+#         return x
+
+
+# ### MAIN ###
+
+# if __name__ == "__main__":
+
+#     param_dict = {
+#         "is_slippery" : True,
+#         "randomize_lake_map" : False,
+#         "discount" : 0.9,
+#         "epsylon" : 0.01,
+#         "hundred_runs" : 5,
+#         "replay_memory_max_size" : 2000,
+#         "replay_regularity" : 20,
+#         "model" : Model00(),
+#         "loss_fn" : nn.MSELoss(),
+#         "minibatch_size" : 32,
+#         "output_folder" : None
+#     }
+#     MyTrainer(**param_dict).run()

@@ -1,0 +1,13 @@
+{
+    "model": "Model00",
+    "loss_fn": "MSELoss",
+    "is_slippery": true,
+    "randomize_lake_map": false,
+    "custom_map": null,
+    "discount": 0.9,
+    "epsylon": 0.01,
+    "hundred_runs": 10,
+    "replay_memory_max_size": 2000,
+    "replay_regularity": 20,
+    "minibatch_size": 32
+}

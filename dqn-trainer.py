@@ -31,6 +31,7 @@ def lake_map_to_tensor(lake_map):
 def rand_action():
     return math.trunc(torch.rand(1).item() * 4)
 
+default_4x4_lake_map = [ "SFFF", "FHFH", "FFFH", "HFFG" ]
 
 ### MODEL ###
 
@@ -55,7 +56,7 @@ class Model00(nn.Module):
 ### TRAINER ###
 
 class MyTrainer():
-    def __init__(self, model, is_slippery, discount, epsylon, hundred_runs, replay_memory_max_size, replay_regularity, minibatch_size, loss_fn, output_folder=None):
+    def __init__(self, model, is_slippery, randomize_lake_map, discount, epsylon, hundred_runs, replay_memory_max_size, replay_regularity, minibatch_size, loss_fn, output_folder=None, custom_map=None):
         self.is_slippery = is_slippery
         self.discount = discount
         self.epsylon = epsylon
@@ -65,30 +66,50 @@ class MyTrainer():
         self.replay_regularity = replay_regularity
         self.minibatch_size = minibatch_size
         self.replay_memory_max_size = replay_memory_max_size
+        self.replay_memory = deque(maxlen=replay_memory_max_size)
+
+        self.randomize_lake_map = randomize_lake_map
+        self.custom_map = custom_map
+        self.lake_map, self.lake_tensor = None, None
+        self.state = self.reset_env()
+
         self.folder = output_folder
         if not self.folder :
             self.folder = "tmp"
+        self.create_folder()
 
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.model.to(self.device)
-        self.state = self.reset_env()
-        self.replay_memory = deque(maxlen=replay_memory_max_size)
 
-        self.create_folder()
         self.write_hyperparams()
 
 
-    def reset_env(self, lake_map=None):
-        if not lake_map :
-            lake_map = random_4x4_lake_map()
+    def run(self):
+        self.training()
+        self.testing()
 
-        self.lake_map = lake_map
-        self.map_tensor = lake_map_to_tensor(lake_map)
-        self.env = gym.make(
-            "FrozenLake-v1",
-            desc=self.lake_map,
-            is_slippery=self.is_slippery
-        )
+
+    def reset_env(self):
+        if self.randomize_lake_map :
+            self.lake_map = random_4x4_lake_map()
+            self.map_tensor = lake_map_to_tensor(self.lake_map)
+            self.env = gym.make(
+                "FrozenLake-v1",
+                desc=self.lake_map,
+                is_slippery=self.is_slippery
+            )
+        elif not self.lake_map or not self.lake_tensor :
+            if not self.custom_map :
+                self.lake_map = default_4x4_lake_map
+            else :
+                self.lake_map = self.custom_map
+            self.map_tensor = lake_map_to_tensor(self.lake_map)
+            self.env = gym.make(
+                "FrozenLake-v1",
+                desc=self.lake_map,
+                is_slippery=self.is_slippery
+            )
+
         return self.env.reset()
 
     def get_epsylon_greedy_action(self, qval):
@@ -142,6 +163,7 @@ class MyTrainer():
 
 
     def do_replay_memory(self, t):
+        # TODO : get learning rate and its decay function as hyperparameters
         base_lr = 1e-1
         decay_lr = math.e ** (-t/(self.hundred_runs * 100))
         learning_rate = base_lr * decay_lr
@@ -160,9 +182,8 @@ class MyTrainer():
     def testing(self):
         rewards = 0
         for t in range(1000):
-            #self.reset_env()
-
             state = self.env.reset()
+
             done = False
             while not done:
                 qval = self.model(state, self.map_tensor)
@@ -192,7 +213,19 @@ class MyTrainer():
             model_name = self.model.__class__.__name__
         except :
             model_name = "/"
-        parameters = { "model": model_name, "loss_fn": loss_fn_name, "is_slippery": self.is_slippery, "discount": self.discount, "epsylon": self.epsylon, "hundred_runs": self.hundred_runs, "replay_memory_max_size": self.replay_memory_max_size, "replay_regularity": self.replay_regularity, "minibatch_size": self.minibatch_size }
+        parameters = {
+            "model": model_name,
+            "loss_fn": loss_fn_name,
+            "is_slippery": self.is_slippery,
+            "randomize_lake_map": self.randomize_lake_map,
+            "custom_map" : self.custom_map,
+            "discount": self.discount,
+            "epsylon": self.epsylon,
+            "hundred_runs": self.hundred_runs,
+            "replay_memory_max_size": self.replay_memory_max_size,
+            "replay_regularity": self.replay_regularity,
+            "minibatch_size": self.minibatch_size
+        }
         json_object = json.dumps(parameters, indent = 4)
         with open("data/" + self.folder + "/hyperparameters.json", "w") as outfile:
             outfile.write(json_object)
@@ -218,6 +251,7 @@ if __name__ == "__main__":
 
     param_dict = {
         "is_slippery" : True,
+        "randomize_lake_map" : False,
         "discount" : 0.9,
         "epsylon" : 0.01,
         "hundred_runs" : 5,
@@ -225,9 +259,7 @@ if __name__ == "__main__":
         "replay_regularity" : 20,
         "model" : Model00(),
         "loss_fn" : nn.MSELoss(),
-        "minibatch_size" : 32
+        "minibatch_size" : 32,
+        "output_folder" : None
     }
-
-    mt = MyTrainer(**param_dict)
-    mt.training()
-    mt.testing()
+    MyTrainer(**param_dict).run()

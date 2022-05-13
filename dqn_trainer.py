@@ -9,7 +9,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 
-from collections import deque
+from collections import deque, OrderedDict
 import math
 import random
 import csv
@@ -64,6 +64,7 @@ def rand_action():
 
 ### TRAINER ###
 
+# QNet contien le réseau de neurones aproximant la q-function
 class QNet(nn.Module):
     def __init__(self):
         super(QNet, self).__init__()
@@ -78,7 +79,8 @@ class QNet(nn.Module):
     def forward(self, state):
         return self.my_nn(state)
 
-
+# ProcessedState sert à encapsuler les différentes parties du state
+# ici ce sont la position du personage ainsi que la carte sur laquelle il joue
 class ProcessedState():
     def __init__(self, raw_state, lake_map):
         self.raw_state = raw_state
@@ -87,14 +89,15 @@ class ProcessedState():
 
     def update(self, raw_state):
         self.raw_state = raw_state
-        return self
 
     def tensor(self):
         return torch.cat((torch.as_tensor([self.raw_state]), self.lake_tensor))
 
 
+# MemoryReplay conserve les states dans lesquels s'est retrouvé le modèle lors
+# de son entrainement pour les restituer sous forme de batches
 class MemoryReplay():
-    def __init__(self, replay_memory_max_size:int):
+    def __init__(self, replay_memory_max_size:int, minibatch_size:int):
         self.replay_memory_max_size = replay_memory_max_size
         self.replay_memory = deque(maxlen=replay_memory_max_size)
 
@@ -103,58 +106,234 @@ class MemoryReplay():
             (state, action, reward, next_state, done)
         )
 
-    def sample(self, amount:int):
-        return random.shuffle(random.sample( self.replay_memory, amount))
+    def sample(self):
+        return random.shuffle(random.sample( self.replay_memory, self.minibatch_size))
 
-    def sample_as_tensor(self, amount:int)
-        sample = self.sample(amount)
+    def sample_as_tensor(self):
+        sample = self.sample(self.minibatch_size)
         ls0, la0, lr, ls1, ldone = [], [], [], [], []
-        for (s0, a0, r, s1, done) in sample :
-            ls0 = ls0.append(s0.tensor())
-            la0 = la0.append(torch.tensor(a0))
-            lr = lr.append(torch.tensor(r))
-            ls1 = ls1.append(s1.tensor())
-            ldone = ldone.append(torch.tensor(done))
-        ts0 = torch.cat(ls0)
-        ta0 = torch.cat(la0)
-        tr = torch.cat(lr)
-        ts1 = torch.cat(ls1)
-        tdone = torch.cat(ldone)
-        return (ts0, ta0, tr, ts1, tdone)
+        df = pd.DataFrame(sample, columns=['states', 'actions', 'rewards', 'next_states', 'done'])
+        out = {}
+        for column in df.columns :
+            out[column] = torch.tensor(df[column].values)
+        return out
+
 
 # Guilhem regarde ici ;)
-# class Environment():
-#     def __init__(self):
+# la classe Environment sert à encapsuler l'enviroment et à stendardiser ses in et outputs
+class Environment():
+    def __init__(self, is_slippery:bool, randomize_lake_map:bool, fixed_start_and_goal:bool, custom_map=None):
+        self.randomize_lake_map = randomize_lake_map
+        self.fixed_start_and_goal = fixed_start_and_goal
+        self.is_slippery = is_slippery
 
-class Agent():
-    def __init__(self, model:QNet, epsilon:float, epsilon_decay_rate:float, epsilon_min:float, lr:float, lr_decay_rate: float, weight_decay: float):
+        self.lake_map = None
+        self.env = None
+        self.state = None
+        self.reset()
 
-    def choose_action(self, state:ProcessedState):
-
-    def update_model(self):
-
-    def _compute_loss(self):
-
-    def _target_update(self):
-
-    def save(self, folder:str = "./data/tmp/"):
-
-class Trainer() :
-    def __init__(self, environment:Environment, agent:Agent, replay:MemoryReplay):
+    def reset(self):
+        if self.randomize_lake_map :
+            self.lake_map = random_4x4_lake_map(self.fixed_start_and_goal)
+            if self.env :
+                self.env.close()
+            self.env = gym.make(
+                "FrozenLake-v1",
+                desc=self.lake_map,
+                is_slippery=self.is_slippery
+            )
+            self.state = ProcessedState(self.env.reset(), self.lake_map)
+        elif not self.lake_map :
+            if not self.custom_map :
+                self.lake_map = default_4x4_lake_map
+            else :
+                self.lake_map = self.custom_map
+            self.env = gym.make(
+                "FrozenLake-v1",
+                desc=self.lake_map,
+                is_slippery=self.is_slippery
+            )
+            self.state = ProcessedState(self.env.reset(), self.lake_map)
 
     def step(self, action:int):
+        new_raw_state, reward, done, _ = self.enf.step(action)
+        old_state = self.state
+        new_state = self.state.new(new_raw_state)
+        self.state = new_state
+        return old_state, new_state, reward, done
 
-    def train(self, n_frames:int, plot:bool = False, plot_each:int = 10):
 
-    def test(self):
+class Agent():
+    def __init__(self, model:QNet, discount:float, epsilon:float, epsilon_decay_rate:float, epsilon_min:float, lr:float, lr_decay_rate:float, weight_decay:float, memory_replay:MemoryReplay):
+        self.model = model
+        self.model_target = copy.deepcopy(model)
+        self.discount = discount
+        self.epsilon = epsilon
+        self.epsilon_decay_rate = epsilon_decay_rate
+        self.epsilon_min = epsilon_min
+        self.lr = lr
+        self.lr_decay_rate = lr_decay_rate
+        self.weight_decay = weight_decay
+        self.memory_replay = memory_replay
 
-    def plot(self):
+        # unexposed hyperparam
+        self.optimizer = torch.optim.RAdam(self.model.parameters(), lr=self.learning_rate, weight_decay=self.weight_decay)
+        self.lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(self.optimizer, self.lr_decay_rate)
+        self.loss_fn = nn.MSELosse()
+
+
+    def choose_optimal_action(self, state:ProcessedState):
+        return self.model(state.tensor()).argmax().item()
+
+    def choose_epsilon_greedy_action(self, state:ProcessedState):
+        qval = self.model(state.tensor())
+        action = rand_action()
+        if not (qval.max() <= 0 or torch.rand(1).item() < self.epsilon) :
+            action = qval.argmax().item()
+        return action
+
+    def epsilon_decay_step(self):
+        if self.epsilon - self.epsilon_decay_rate - self.epsilon_min <= 0 :
+            self.epsilon -= self.epsilon_decay_rate
+
+    def model_backprop(self):
+        samples = self.memory_replay.sample_as_tensor()
+        pred_qvals = self.model(samples['states'])
+
+        next_best_actions = self.model(samples['next_states']).argmax(dim=-1)
+        next_qvals = self.model_target(samples['next_states'])
+
+        updated_qvals = pred_qvals.clone()
+        for i, (next_best_action, next_qval, reward, done) in enumerate(zip(next_best_actions, next_qvals, samples['reward'], samples['done'])) :
+            if done :
+                updated_qvals[i][action] = reward
+            else :
+                updated_qvals[i][action] = reward + self.discount * next_qval[next_best_action]
+
+        loss = self._compute_loss(pred_qvals, updated_qvals)
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+        self._target_update()
+
+    def _compute_loss(self, pred_y, y):
+        return self.loss_fn(pred_y, y)
+
+    def _target_update(self):
+        self.model_target = copy.deepcopy(self.model)
+
+    def save(self, folder:str):
+        self._save_params(folder)
+        self._save_hyperparams(folder)
+
+    def _save_params(self, folder:str) :
+        torch.save(self.model.state_dict(), folder + "/parameters.torch")
+
+    def _save_hyperparams(self, folder:str) :
+        try :
+            model_name = self.model.__class__.__name__
+        except :
+            model_name = "?"
+        try :
+            optimizer_name = self.optimizer.__class__.__name__
+        except :
+            optimizer_name = "?"
+        try :
+            lr_scheduler_name = self.lr_scheduler.__class__.__name__
+        except :
+            lr_scheduler_name = "?"
+        try :
+            loss_fn_name = self.loss_fn.__class__.__name__
+        except :
+            loss_fn_name = "?"
+        hyperparameters = {
+            "model": model_name,
+            "lr_scheduler": lr_scheduler_name,
+            "optimizer": optimizer_name,
+            "loss_fn": loss_fn_name,
+            "discount": self.discount,
+            "epsilon": self.epsilon,
+            "epsilon_decay_rate": self.epsilon_decay_rate,
+            "epsilon_min": self.epsilon_min,
+            "minibatch_size": self.minibatch_size,
+            "weight_decay": self.weight_decay,
+            "learning_rate": self.lr,
+            "learning_rate_decay": self.lr_decay_rate,
+            "device": self.device,
+            "replay_memory_max_size": self.replay_memory.replay_memory_max_size
+        }
+        with open(folder + "/hyperparameters.json", "w") as outfile:
+            outfile.write(json.dumps(hyperparameters, indent = 4))
+
+
+class Trainer() :
+    def __init__(self, environment:Environment, agent:Agent):
+        self.agent = agent
+        self.env = environment
+        self.memory = agent.memory_replay
+
+    # la fonction train sert à entrainer l'agent.
+    # 1. en générant des exemples et en les enregistrant dans le memory_replay
+    # 2. en appelant agent.model_backprop() pour qu'il apprenne sur base de ces exemples
+    def train(self, timesteps:int, replay_every:int):
+        rewards_counter = 0
+        done_counter = 0
+        for t in range(timesteps)
+            action = agent.choose_epsilon_greedy_action(env.state)
+            old_state, new_state, reward, done = self.env.step(action)
+            memory.store(old_state, action, reward, new_state)
+            rewards_counter += reward
+            done_counter += done
+            if not (done_counter % 1000):
+                print('Average reward after {} training runs : {}%'.format(done_counter, rewards_counter / 1000))
+                rewards_counter = 0
+            if not (t % replay_every):
+                agent.model_backprop()
+            if done:
+                self.env.reset()
+
+
+    # la fonction test sert à tester l'agent dans ses meilleurs conditions
+    # en fesant jouer l'agent et en gardant trace de ses performances
+    def test(self, runs:int=1000):
+        reward = 0
+        for t in range(runs):
+            done = false
+            while not done:
+                action = agent.choose_optimal_action(env.state)
+                old_state, new_state, reward, done = self.env.step(action)
+                rewards_counter += reward
+            self.env.reset()
+        print('Average reward after {} training runs : {}%'.format(runs, rewards_counter / runs))
+
+
+    #def step(self, action:int):
+    #    next_state, reward, done, info = self.env.step(action)
+    # def plot(self):
+    #     agent.choose_epsilon_greedy_action()
+
+    def _create_save_folder(self) :
+        if not os.path.exists("dqn-trainer-data/" + self.folder):
+            os.makedirs("dqn-trainer-data/" + self.folder)
+
+    def _save_training_parameters(self, rewards) :
+        with open("dqn-trainer-data/" + self.folder + '/training.csv', 'w') as csvfile:
+            columns = ['total training runs', 'avg reward over last 100 training runs']
+            writer = csv.DictWriter(csvfile, fieldnames = columns)
+            writer.writeheader()
+            writer.writerows(rewards)
+
+    def _save_success_rate(self, rate) :
+        with open("dqn-trainer-data/" + self.folder + "/success_rate.txt", "w") as outfile:
+            outfile.write(str(rate))
+        self.env.close()
+        self.write_training_results(rewards)
 
 
 # Old code
 
 class MyTrainer():
-    def __init__(self, model, is_slippery, randomize_lake_map, fixed_start_and_goal, discount, epsylon, hundred_runs, replay_memory_max_size, replay_regularity, minibatch_size, weight_decay, learning_rate, learning_rate_decay, output_folder=None, custom_map=None):
+    def __init__(self, model, is_slippery, randomize_lake_map, fixed_start_and_goal, discount, epsilon, d_runs, replay_memory_max_size, replay_regularity, minibatch_size, weight_decay, learning_rate, learning_rate_decay, output_folder=None, custom_map=None):
         # the unexposed hyperparameters are :
         # optimizer, loss_fn and lr_scheduler functions
         # might have a few other
@@ -163,8 +342,8 @@ class MyTrainer():
         self.model = model
         self.target_model = copy.deepcopy(self.model)
         self.discount = discount
-        self.epsylon = epsylon
-        self.hundred_runs = hundred_runs
+        self.epsilon = epsilon
+        self.d_runs = d_runs
         self.replay_regularity = replay_regularity
         self.minibatch_size = minibatch_size
         self.replay_memory_max_size = replay_memory_max_size
@@ -193,7 +372,8 @@ class MyTrainer():
         self.model.to(self.device)
 
         self.write_hyperparams()
-        # Trainer
+
+    # Trainer
 
     def run(self):
         self.training()
@@ -236,7 +416,7 @@ class MyTrainer():
             while not done:
                 # agent
                 qval = self.model(state, self.map_tensor)
-                action = self.get_epsylon_greedy_action(qval)
+                action = self.get_epsilon_greedy_action(qval)
                 # trainer
                 next_state, reward, done, info = self.env.step(action)
 
@@ -281,7 +461,6 @@ class MyTrainer():
         if not os.path.exists("dqn-trainer-data/" + self.folder):
             os.makedirs("dqn-trainer-data/" + self.folder)
 
-
     def write_hyperparams(self) :
         try :
             model_name = self.model.__class__.__name__
@@ -294,7 +473,7 @@ class MyTrainer():
             "fixed_start_and_goal": self.fixed_start_and_goal,
             "custom_map" : self.custom_map,
             "discount": self.discount,
-            "epsylon": self.epsylon,
+            "epsilon": self.epsilon,
             "hundred_runs": self.hundred_runs,
             "replay_memory_max_size": self.replay_memory_max_size,
             "replay_regularity": self.replay_regularity,
@@ -329,9 +508,9 @@ class MyTrainer():
 
     # Agent
 
-    def get_epsylon_greedy_action(self, qval):
+    def get_epsilon_greedy_action(self, qval):
         action = rand_action()
-        if not (qval.max() <= 0 or torch.rand(1).item() < self.epsylon) :
+        if not (qval.max() <= 0 or torch.rand(1).item() < self.epsilon) :
             action = qval.argmax().item()
         return action
 
@@ -341,7 +520,9 @@ class MyTrainer():
 
 
     def bellman_eq(self, action, reward, qval_now, state_next):
-        qval_now_updated = qval    qval_now_updated[action] = reward + self.discount * max_qval_next
+        qval_now_updated = qval
+        # ??? some lines missing
+        qval_now_updated[action] = reward + self.discount * max_qval_next
         return qval_now_updated
         self.write_training_results(rewards)
 
@@ -404,7 +585,7 @@ if __name__ == "__main__":
         "randomize_lake_map" : True,
         "fixed_start_and_goal" : True,
         "discount" : 0.9,
-        "epsylon" : 0.05,
+        "epsilon" : 0.05,
         "hundred_runs" : 10,
         "replay_memory_max_size" : 8192,
         "replay_regularity" : 20,

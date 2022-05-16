@@ -8,6 +8,7 @@ import gym
 import torch
 import torch.nn as nn
 import numpy as np
+import pandas as pd
 
 from collections import deque, OrderedDict
 import math
@@ -61,6 +62,9 @@ def lake_map_to_tensor(lake_map):
 def rand_action():
     return math.trunc(torch.rand(1).item() * 4)
 
+def create_folder(folder) :
+    if not os.path.exists(folder):
+        os.makedirs(folder)
 
 ### TRAINER ###
 
@@ -91,7 +95,7 @@ class ProcessedState():
         self.raw_state = raw_state
 
     def tensor(self):
-        return torch.cat((torch.as_tensor([self.raw_state]), self.lake_tensor))
+        return torch.cat((torch.as_tensor([self.raw_state]), self.map_tensor))
 
 
 # MemoryReplay conserve les states dans lesquels s'est retrouvé le modèle lors
@@ -100,23 +104,53 @@ class MemoryReplay():
     def __init__(self, replay_memory_max_size:int, minibatch_size:int):
         self.replay_memory_max_size = replay_memory_max_size
         self.replay_memory = deque(maxlen=replay_memory_max_size)
+        self.minibatch_size = minibatch_size
 
     def store(self, state:ProcessedState, action:int, reward:float, next_state:ProcessedState, done:bool):
-        self.replay_memory.append(
-            (state, action, reward, next_state, done)
-        )
+        self.replay_memory.append({
+            "s0":state,
+            "a":action,
+            "r":reward,
+            "s1":next_state,
+            "d":done
+        })
 
     def sample(self):
-        return random.shuffle(random.sample( self.replay_memory, self.minibatch_size))
+        sample = random.sample( self.replay_memory, self.minibatch_size)
+        random.shuffle(sample)
+        return sample
 
     def sample_as_tensor(self):
-        sample = self.sample(self.minibatch_size)
-        ls0, la0, lr, ls1, ldone = [], [], [], [], []
-        df = pd.DataFrame(sample, columns=['states', 'actions', 'rewards', 'next_states', 'done'])
-        out = {}
-        for column in df.columns :
-            out[column] = torch.tensor(df[column].values)
-        return out
+        sample = self.sample()
+        keys = ['s0', 'a', 'r', 's1', 'd']
+        sample_dict = {key : [] for key in keys}
+        for s in sample :
+            sample_dict['s0'].append(s['s0'].tensor())
+            sample_dict['s1'].append(s['s1'].tensor())
+            sample_dict['a'].append(s['a'])
+            sample_dict['r'].append(s['r'])
+            sample_dict['d'].append(s['d'])
+        print(sample_dict)
+        sample_tensor_dict = {
+            's0': torch.cat(sample_dict['s0']),
+            's1': torch.cat(sample_dict['s1']),
+            'a': torch.tensor(sample_dict['a']),
+            'r': torch.tensor(sample_dict['r']),
+            'd': torch.tensor(sample_dict['d']),
+        }
+        print(sample_tensor_dict)
+        return sample_tensor_dict
+
+    def is_large_enough(self):
+        return (len(self.replay_memory) > self.minibatch_size)
+
+    def save(self, folder:str):
+        mem_params = {
+            "replay_memory_max_size": self.replay_memory_max_size,
+            "minibatch_size": self.minibatch_size,
+        }
+        with open(folder + "/memory_replay.json", "w") as outfile:
+            outfile.write(json.dumps(mem_params, indent = 4))
 
 
 # Guilhem regarde ici ;)
@@ -127,7 +161,7 @@ class Environment():
         self.fixed_start_and_goal = fixed_start_and_goal
         self.is_slippery = is_slippery
 
-        self.lake_map = None
+        self.lake_map = default_4x4_lake_map if not custom_map else custom_map
         self.env = None
         self.state = None
         self.reset()
@@ -136,37 +170,47 @@ class Environment():
         if self.randomize_lake_map :
             self.lake_map = random_4x4_lake_map(self.fixed_start_and_goal)
             if self.env :
-                self.env.close()
+                self.close()
             self.env = gym.make(
                 "FrozenLake-v1",
                 desc=self.lake_map,
                 is_slippery=self.is_slippery
             )
             self.state = ProcessedState(self.env.reset(), self.lake_map)
-        elif not self.lake_map :
-            if not self.custom_map :
-                self.lake_map = default_4x4_lake_map
-            else :
-                self.lake_map = self.custom_map
+        elif not self.state or not self.env :
             self.env = gym.make(
                 "FrozenLake-v1",
                 desc=self.lake_map,
                 is_slippery=self.is_slippery
             )
             self.state = ProcessedState(self.env.reset(), self.lake_map)
+        else :
+            self.state.update(self.env.reset())
 
     def step(self, action:int):
-        new_raw_state, reward, done, _ = self.enf.step(action)
-        old_state = self.state
-        new_state = self.state.new(new_raw_state)
-        self.state = new_state
-        return old_state, new_state, reward, done
+        new_raw_state, reward, done, _ = self.env.step(action)
+        old_state = copy.deepcopy(self.state)
+        self.state.update(new_raw_state)
+        return old_state, self.state, reward, done
+
+    def close(self):
+        self.env.close()
+        self.state = None
+
+    def save(self, folder:str):
+        env_params = {
+            "is_slippery": self.is_slippery,
+            "randomize_lake_map": self.randomize_lake_map,
+            "fixed_start_and_goal": self.fixed_start_and_goal,
+            "map": self.lake_map
+        }
+        with open(folder + "/environment.json", "w") as outfile:
+            outfile.write(json.dumps(env_params, indent = 4))
 
 
 class Agent():
     def __init__(self, model:QNet, discount:float, epsilon:float, epsilon_decay_rate:float, epsilon_min:float, lr:float, lr_decay_rate:float, weight_decay:float, memory_replay:MemoryReplay):
         self.model = model
-        self.model_target = copy.deepcopy(model)
         self.discount = discount
         self.epsilon = epsilon
         self.epsilon_decay_rate = epsilon_decay_rate
@@ -176,10 +220,14 @@ class Agent():
         self.weight_decay = weight_decay
         self.memory_replay = memory_replay
 
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.model.to(self.device)
+        self.model_target = copy.deepcopy(model)
+
         # unexposed hyperparam
-        self.optimizer = torch.optim.RAdam(self.model.parameters(), lr=self.learning_rate, weight_decay=self.weight_decay)
+        self.optimizer = torch.optim.RAdam(self.model.parameters(), lr=self.lr, weight_decay=self.weight_decay)
         self.lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(self.optimizer, self.lr_decay_rate)
-        self.loss_fn = nn.MSELosse()
+        self.loss_fn = nn.MSELoss()
 
 
     def choose_optimal_action(self, state:ProcessedState):
@@ -192,34 +240,40 @@ class Agent():
             action = qval.argmax().item()
         return action
 
-    def epsilon_decay_step(self):
-        if self.epsilon - self.epsilon_decay_rate - self.epsilon_min <= 0 :
-            self.epsilon -= self.epsilon_decay_rate
 
     def model_backprop(self):
-        samples = self.memory_replay.sample_as_tensor()
-        pred_qvals = self.model(samples['states'])
+        if self.memory_replay.is_large_enough():
+            print(len(self.memory_replay.replay_memory))
+            samples = self.memory_replay.sample_as_tensor()
+            print(samples['s0'].size())
+            pred_qvals = self.model(samples['s0'])
 
-        next_best_actions = self.model(samples['next_states']).argmax(dim=-1)
-        next_qvals = self.model_target(samples['next_states'])
+            next_best_actions = self.model(samples['s1']).argmax(dim=-1)
+            next_qvals = self.model_target(samples['s1'])
 
-        updated_qvals = pred_qvals.clone()
-        for i, (next_best_action, next_qval, reward, done) in enumerate(zip(next_best_actions, next_qvals, samples['reward'], samples['done'])) :
-            if done :
-                updated_qvals[i][action] = reward
-            else :
-                updated_qvals[i][action] = reward + self.discount * next_qval[next_best_action]
+            updated_qvals = pred_qvals.clone()
+            for i, (next_best_action, next_qval, action, reward, done) in enumerate(zip(next_best_actions, next_qvals, samples['a'], samples['r'], samples['d'])) :
+                if done :
+                    updated_qvals[i][action] = reward
+                else :
+                    updated_qvals[i][action] = reward + self.discount * next_qval[next_best_action]
 
-        loss = self._compute_loss(pred_qvals, updated_qvals)
-        self.optimizer.zero_grad()
-        loss.backward()
-        self.optimizer.step()
-        self._target_update()
+            loss = self._compute_loss(pred_qvals, updated_qvals)
+            self.optimizer.zero_grad()
+            loss.backward()
+            self.optimizer.step()
+            self.lr_scheduler.step()
+            self._epsilon_decay_step()
+            self._target_model_update()
+
+    def _epsilon_decay_step(self):
+        if self.epsilon - self.epsilon_decay_rate - self.epsilon_min <= 0 :
+            self.epsilon -= self.epsilon_decay_rate
 
     def _compute_loss(self, pred_y, y):
         return self.loss_fn(pred_y, y)
 
-    def _target_update(self):
+    def _target_model_update(self):
         self.model_target = copy.deepcopy(self.model)
 
     def save(self, folder:str):
@@ -255,12 +309,10 @@ class Agent():
             "epsilon": self.epsilon,
             "epsilon_decay_rate": self.epsilon_decay_rate,
             "epsilon_min": self.epsilon_min,
-            "minibatch_size": self.minibatch_size,
             "weight_decay": self.weight_decay,
             "learning_rate": self.lr,
             "learning_rate_decay": self.lr_decay_rate,
             "device": self.device,
-            "replay_memory_max_size": self.replay_memory.replay_memory_max_size
         }
         with open(folder + "/hyperparameters.json", "w") as outfile:
             outfile.write(json.dumps(hyperparameters, indent = 4))
@@ -271,24 +323,28 @@ class Trainer() :
         self.agent = agent
         self.env = environment
         self.memory = agent.memory_replay
+        self.training_data = {}
+        self.testing_data = []
 
     # la fonction train sert à entrainer l'agent.
     # 1. en générant des exemples et en les enregistrant dans le memory_replay
     # 2. en appelant agent.model_backprop() pour qu'il apprenne sur base de ces exemples
-    def train(self, timesteps:int, replay_every:int):
+    def train(self, timesteps:int, backprop_regularity:int):
+        training_id = len(self.training_data)
+        self.training_data[training_id] = []
         rewards_counter = 0
         done_counter = 0
-        for t in range(timesteps)
-            action = agent.choose_epsilon_greedy_action(env.state)
+        for t in range(timesteps) :
+            action = self.agent.choose_epsilon_greedy_action(self.env.state)
             old_state, new_state, reward, done = self.env.step(action)
-            memory.store(old_state, action, reward, new_state)
+            self.memory.store(old_state, action, reward, new_state, done)
             rewards_counter += reward
-            done_counter += done
-            if not (done_counter % 1000):
-                print('Average reward after {} training runs : {}%'.format(done_counter, rewards_counter / 1000))
+            done_counter += 1 if done else 0
+            if (done_counter + 1) % backprop_regularity == 0 :
+                print('Average reward after {} training runs : {}'.format(done_counter + 1, rewards_counter / backprop_regularity))
                 rewards_counter = 0
-            if not (t % replay_every):
-                agent.model_backprop()
+                self.training_data[training_id].append((done_counter, rewards_counter / backprop_regularity))
+                self.agent.model_backprop()
             if done:
                 self.env.reset()
 
@@ -296,15 +352,16 @@ class Trainer() :
     # la fonction test sert à tester l'agent dans ses meilleurs conditions
     # en fesant jouer l'agent et en gardant trace de ses performances
     def test(self, runs:int=1000):
-        reward = 0
+        rewards_counter = 0
         for t in range(runs):
-            done = false
+            done = False
             while not done:
-                action = agent.choose_optimal_action(env.state)
+                action = self.agent.choose_optimal_action(self.env.state)
                 old_state, new_state, reward, done = self.env.step(action)
                 rewards_counter += reward
             self.env.reset()
-        print('Average reward after {} training runs : {}%'.format(runs, rewards_counter / runs))
+        print('Average reward after {} testing runs : {}'.format(runs, rewards_counter / runs))
+        self.testing_data.append((runs, rewards_counter / runs))
 
 
     #def step(self, action:int):
@@ -312,288 +369,331 @@ class Trainer() :
     # def plot(self):
     #     agent.choose_epsilon_greedy_action()
 
-    def _create_save_folder(self) :
-        if not os.path.exists("dqn-trainer-data/" + self.folder):
-            os.makedirs("dqn-trainer-data/" + self.folder)
+    def save(self, folder:str):
+        self._save_training_data(folder)
+        self._save_testing_data(folder)
 
-    def _save_training_parameters(self, rewards) :
-        with open("dqn-trainer-data/" + self.folder + '/training.csv', 'w') as csvfile:
-            columns = ['total training runs', 'avg reward over last 100 training runs']
+    def _save_training_data(self, folder:str):
+        for i, td in self.training_data.items() :
+            print(type(td[0]))
+            with open(folder + '/training_' + str(i) + '.csv', 'w') as csvfile:
+                columns = ['total training runs', 'avg reward over last 100 training runs']
+                writer = csv.DictWriter(csvfile, fieldnames = columns)
+                writer.writeheader()
+                writer.writerow(td)
+
+
+    def _save_testing_data(self, folder:str):
+        with open(folder + "/testing.csv", "w") as csvfile:
+            columns = ['testing runs amount', 'avg reward over testing runs']
             writer = csv.DictWriter(csvfile, fieldnames = columns)
             writer.writeheader()
-            writer.writerows(rewards)
+            writer.writerows(self.testing_data)
 
-    def _save_success_rate(self, rate) :
-        with open("dqn-trainer-data/" + self.folder + "/success_rate.txt", "w") as outfile:
-            outfile.write(str(rate))
-        self.env.close()
-        self.write_training_results(rewards)
-
-
-# Old code
-
-class MyTrainer():
-    def __init__(self, model, is_slippery, randomize_lake_map, fixed_start_and_goal, discount, epsilon, d_runs, replay_memory_max_size, replay_regularity, minibatch_size, weight_decay, learning_rate, learning_rate_decay, output_folder=None, custom_map=None):
-        # the unexposed hyperparameters are :
-        # optimizer, loss_fn and lr_scheduler functions
-        # might have a few other
-
-        #Agent
-        self.model = model
-        self.target_model = copy.deepcopy(self.model)
-        self.discount = discount
-        self.epsilon = epsilon
-        self.d_runs = d_runs
-        self.replay_regularity = replay_regularity
-        self.minibatch_size = minibatch_size
-        self.replay_memory_max_size = replay_memory_max_size
-        self.replay_memory = deque(maxlen=replay_memory_max_size)
-
-        self.loss_fn = nn.MSELoss()
-        self.weight_decay = weight_decay
-        self.learning_rate = learning_rate
-        self.learning_rate_decay = learning_rate_decay
-        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.learning_rate, weight_decay=self.weight_decay)
-        self.lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(self.optimizer, self.learning_rate_decay)
-
-        self.is_slippery = is_slippery
-        self.randomize_lake_map = randomize_lake_map
-        self.fixed_start_and_goal = fixed_start_and_goal
-        self.custom_map = custom_map
-        self.lake_map, self.lake_tensor = None, None
-        self.state = self.reset_env()
-
-        self.folder = output_folder
-        if not self.folder :
-            self.folder = "tmp"
-        self.create_folder()
-
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.model.to(self.device)
-
-        self.write_hyperparams()
-
-    # Trainer
-
-    def run(self):
-        self.training()
-        self.testing()
-
-
-    def reset_env(self):
-        if self.randomize_lake_map :
-            self.lake_map = random_4x4_lake_map(self.fixed_start_and_goal)
-            self.map_tensor = lake_map_to_tensor(self.lake_map)
-            if "self.env" in locals() :
-                self.env.close()
-            self.env = gym.make(
-                "FrozenLake-v1",
-                desc=self.lake_map,
-                is_slippery=self.is_slippery
-            )
-        elif not self.lake_map or not self.lake_tensor :
-            if not self.custom_map :
-                self.lake_map = default_4x4_lake_map
-            else :
-                self.lake_map = self.custom_map
-            self.map_tensor = lake_map_to_tensor(self.lake_map)
-            self.env = gym.make(
-                "FrozenLake-v1",
-                desc=self.lake_map,
-                is_slippery=self.is_slippery
-            )
-        return self.env.reset()
-
-    def training(self): # FIXME
-        rewards = []
-
-        rewards_counter = 0
-        for t in range(self.hundred_runs * 100):
-
-            state = self.reset_env()
-
-            done = False
-            while not done:
-                # agent
-                qval = self.model(state, self.map_tensor)
-                action = self.get_epsilon_greedy_action(qval)
-                # trainer
-                next_state, reward, done, info = self.env.step(action)
-
-                self.replay_memory.append(
-                    (state, action, reward, next_state, done)
-                )
-
-                state = next_state
-                rewards_counter += reward
-
-            if t % 100 == 99 :
-                print('Average reward after {} training runs : {}'.format(t+1, rewards_counter/100))
-                rewards.append({
-                    "total training runs" : t+1,
-                    "avg reward over last 100 training runs" : rewards_counter/100
-                })
-                rewards_counter = 0
-
-            if t % self.replay_regularity == self.replay_regularity - 1:
-                self.do_replay_memory(t)
-
-
-    def testing(self):
-        rewards = 0
-        for t in range(1000):
-            state = self.reset_env()
-
-            done = False
-            while not done:
-                qval = self.model(state, self.map_tensor)
-                action = self.get_optimal_action(qval)
-                new_state, reward, done, info = self.env.step(action)
-                state = new_state
-                rewards += reward
-
-        self.env.close()
-        print('Average reward after 1000 runs with optimal strategy : {}'.format(rewards/1000))
-        self.write_params()
-        self.write_success_rate(rewards/1000)
-
-    def create_folder(self) :
-        if not os.path.exists("dqn-trainer-data/" + self.folder):
-            os.makedirs("dqn-trainer-data/" + self.folder)
-
-    def write_hyperparams(self) :
-        try :
-            model_name = self.model.__class__.__name__
-        except :
-            model_name = "?"
-        parameters = {
-            "model": model_name,
-            "is_slippery": self.is_slippery,
-            "randomize_lake_map": self.randomize_lake_map,
-            "fixed_start_and_goal": self.fixed_start_and_goal,
-            "custom_map" : self.custom_map,
-            "discount": self.discount,
-            "epsilon": self.epsilon,
-            "hundred_runs": self.hundred_runs,
-            "replay_memory_max_size": self.replay_memory_max_size,
-            "replay_regularity": self.replay_regularity,
-            "minibatch_size": self.minibatch_size,
-            "weight_decay": self.weight_decay,
-            "learning_rate": self.learning_rate,
-            "learning_rate_decay": self.learning_rate_decay,
-            "device": self.device
-        }
-        json_object = json.dumps(parameters, indent = 4)
-        with open("dqn-trainer-data/" + self.folder + "/hyperparameters.json", "w") as outfile:
-            outfile.write(json_object)
-
-
-    def write_training_results(self, rewards) :
-        with open("dqn-trainer-data/" + self.folder + '/training.csv', 'w') as csvfile:
-            columns = ['total training runs', 'avg reward over last 100 training runs']
-            writer = csv.DictWriter(csvfile, fieldnames = columns)
-            writer.writeheader()
-            writer.writerows(rewards)
-
-
-    def write_params(self) :
-        torch.save(self.model.state_dict(), "dqn-trainer-data/" + self.folder + "/parameters.torch")
-
-
-    def write_success_rate(self, rate) :
-        with open("dqn-trainer-data/" + self.folder + "/success_rate.txt", "w") as outfile:
-            outfile.write(str(rate))
-        self.env.close()
-        self.write_training_results(rewards)
-
-    # Agent
-
-    def get_epsilon_greedy_action(self, qval):
-        action = rand_action()
-        if not (qval.max() <= 0 or torch.rand(1).item() < self.epsilon) :
-            action = qval.argmax().item()
-        return action
-
-
-    def get_optimal_action(self, qval):
-        return qval.argmax().item()
-
-
-    def bellman_eq(self, action, reward, qval_now, state_next):
-        qval_now_updated = qval
-        # ??? some lines missing
-        qval_now_updated[action] = reward + self.discount * max_qval_next
-        return qval_now_updated
-        self.write_training_results(rewards)
-
-
-    def do_replay_memory(self, t):
-        replays = random.sample(
-            self.replay_memory,
-            min( round( len(self.replay_memory)/5 ), self.minibatch_size )
-        )
-        for (state, action, reward, new_state, done) in replays:
-            qval = self.model(state, self.map_tensor)
-            new_qval = reward if done else self.bellman_eq(action, reward, qval, new_state)
-            loss = self.loss_fn(qval, new_qval)
-            self.optimizer.zero_grad()
-            loss.backward()
-            self.optimizer.step()
-        if len(replays) == 0 :
-        with open("dqn-trainer-data/" + self.folder + "/success_rate.txt", "w") as outfile:
-            outfile.write(str(rate))
-
-# states, actions, rewards, next_states, dones = self.sample_memory()
-
-# indices = np.arange(self.batch_size)
-# q_pred = self.q_net.forward(states)[indices, actions]
-# q_next = self._get_qnext(next_states)
-
-# q_next[dones] = 0.0
-# q_target = rewards + self.gamma * q_next
-
-# loss = self.q_net.loss(q_target, q_pred).to(self.q_net.device)
-# loss.backward()
-# self.q_net.optimizer.step()
-
-### MODEL ###
-
-# model for 4x4 grids
-class MyModel(nn.Module):
-    def __init__(self):
-        super(MyModel, self).__init__()
-        self.my_nn = nn.Sequential(
-             nn.Linear(17, 128),
-             nn.ReLU(),
-             nn.Linear(128, 32),
-             nn.ReLU(),
-             nn.Linear(32, 4)
-        )
-
-    def forward(self, state, lake_tensor):
-        x = torch.cat((torch.as_tensor([state]), lake_tensor))
-        x = self.my_nn(x)
-        return x
 
 
 ### MAIN ###
 
 if __name__ == "__main__":
-
-    param_dict = {
-        "is_slippery" : True,
-        "randomize_lake_map" : True,
-        "fixed_start_and_goal" : True,
-        "discount" : 0.9,
-        "epsilon" : 0.05,
-        "hundred_runs" : 10,
-        "replay_memory_max_size" : 8192,
-        "replay_regularity" : 20,
-        "model" : MyModel(),
-        "minibatch_size" : 128,
-        "weight_decay": 1e-8,
-        "learning_rate": 0.01,
-        "learning_rate_decay": 0,
-        "output_folder" : None
+    model = QNet()
+    mem_params = {
+        "replay_memory_max_size" : 2**11,
+        "minibatch_size" : 3,
     }
-    MyTrainer(**param_dict).run()
+    memory = MemoryReplay(**mem_params)
+    ag_params = {
+        "model" : model,
+        "discount" : 0.9,
+        "epsilon" : 0.1,
+        "epsilon_decay_rate" : 0.001,
+        "epsilon_min" : 0.001,
+        "lr" : 0.01,
+        "lr_decay_rate" : 1e-5,
+        "weight_decay" : 1e-8,
+        "memory_replay" : memory,
+    }
+    agent = Agent(**ag_params)
+    env_params = {
+        "is_slippery" : True,
+        "randomize_lake_map" : False,
+        "fixed_start_and_goal" : True,
+    }
+    enviroment = Environment(**env_params)
+    trainer = Trainer(enviroment, agent)
+
+    trainer.train(int(1e6), 10)
+    trainer.test()
+
+    folder = "tmp_data"
+    create_folder(folder)
+    memory.save(folder)
+    agent.save(folder)
+    enviroment.save(folder)
+    trainer.save(folder)
+
+
+# # Old code
+
+# class MyTrainer():
+#     def __init__(self, model, is_slippery, randomize_lake_map, fixed_start_and_goal, discount, epsilon, d_runs, replay_memory_max_size, replay_regularity, minibatch_size, weight_decay, learning_rate, learning_rate_decay, output_folder=None, custom_map=None):
+#         # the unexposed hyperparameters are :
+#         # optimizer, loss_fn and lr_scheduler functions
+#         # might have a few other
+
+#         #Agent
+#         self.model = model
+#         self.target_model = copy.deepcopy(self.model)
+#         self.discount = discount
+#         self.epsilon = epsilon
+#         self.d_runs = d_runs
+#         self.replay_regularity = replay_regularity
+#         self.minibatch_size = minibatch_size
+#         self.replay_memory_max_size = replay_memory_max_size
+#         self.replay_memory = deque(maxlen=replay_memory_max_size)
+
+#         self.loss_fn = nn.MSELoss()
+#         self.weight_decay = weight_decay
+#         self.learning_rate = learning_rate
+#         self.learning_rate_decay = learning_rate_decay
+#         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.learning_rate, weight_decay=self.weight_decay)
+#         self.lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(self.optimizer, self.learning_rate_decay)
+
+#         self.is_slippery = is_slippery
+#         self.randomize_lake_map = randomize_lake_map
+#         self.fixed_start_and_goal = fixed_start_and_goal
+#         self.custom_map = custom_map
+#         self.lake_map, self.lake_tensor = None, None
+#         self.state = self.reset_env()
+
+#         self.folder = output_folder
+#         if not self.folder :
+#             self.folder = "tmp"
+#         self.create_folder()
+
+#         self.device = "cuda" if torch.cuda.is_available() else "cpu"
+#         self.model.to(self.device)
+
+#         self.write_hyperparams()
+
+#     # Trainer
+
+#     def run(self):
+#         self.training()
+#         self.testing()
+
+
+#     def reset_env(self):
+#         if self.randomize_lake_map :
+#             self.lake_map = random_4x4_lake_map(self.fixed_start_and_goal)
+#             self.map_tensor = lake_map_to_tensor(self.lake_map)
+#             if "self.env" in locals() :
+#                 self.env.close()
+#             self.env = gym.make(
+#                 "FrozenLake-v1",
+#                 desc=self.lake_map,
+#                 is_slippery=self.is_slippery
+#             )
+#         elif not self.lake_map or not self.lake_tensor :
+#             if not self.custom_map :
+#                 self.lake_map = default_4x4_lake_map
+#             else :
+#                 self.lake_map = self.custom_map
+#             self.map_tensor = lake_map_to_tensor(self.lake_map)
+#             self.env = gym.make(
+#                 "FrozenLake-v1",
+#                 desc=self.lake_map,
+#                 is_slippery=self.is_slippery
+#             )
+#         return self.env.reset()
+
+#     def training(self): # FIXME
+#         rewards = []
+
+#         rewards_counter = 0
+#         for t in range(self.hundred_runs * 100):
+
+#             state = self.reset_env()
+
+#             done = False
+#             while not done:
+#                 # agent
+#                 qval = self.model(state, self.map_tensor)
+#                 action = self.get_epsilon_greedy_action(qval)
+#                 # trainer
+#                 next_state, reward, done, info = self.env.step(action)
+
+#                 self.replay_memory.append(
+#                     (state, action, reward, next_state, done)
+#                 )
+
+#                 state = next_state
+#                 rewards_counter += reward
+
+#             if t % 100 == 99 :
+#                 print('Average reward after {} training runs : {}'.format(t+1, rewards_counter/100))
+#                 rewards.append({
+#                     "total training runs" : t+1,
+#                     "avg reward over last 100 training runs" : rewards_counter/100
+#                 })
+#                 rewards_counter = 0
+
+#             if t % self.replay_regularity == self.replay_regularity - 1:
+#                 self.do_replay_memory(t)
+
+
+#     def testing(self):
+#         rewards = 0
+#         for t in range(1000):
+#             state = self.reset_env()
+
+#             done = False
+#             while not done:
+#                 qval = self.model(state, self.map_tensor)
+#                 action = self.get_optimal_action(qval)
+#                 new_state, reward, done, info = self.env.step(action)
+#                 state = new_state
+#                 rewards += reward
+
+#         self.env.close()
+#         print('Average reward after 1000 runs with optimal strategy : {}'.format(rewards/1000))
+#         self.write_params()
+#         self.write_success_rate(rewards/1000)
+
+
+
+#     def write_hyperparams(self) :
+#         try :
+#             model_name = self.model.__class__.__name__
+#         except :
+#             model_name = "?"
+#         parameters = {
+#             "model": model_name,
+#             "is_slippery": self.is_slippery,
+#             "randomize_lake_map": self.randomize_lake_map,
+#             "fixed_start_and_goal": self.fixed_start_and_goal,
+#             "custom_map" : self.custom_map,
+#             "discount": self.discount,
+#             "epsilon": self.epsilon,
+#             "hundred_runs": self.hundred_runs,
+#             "replay_memory_max_size": self.replay_memory_max_size,
+#             "replay_regularity": self.replay_regularity,
+#             "minibatch_size": self.minibatch_size,
+#             "weight_decay": self.weight_decay,
+#             "learning_rate": self.learning_rate,
+#             "learning_rate_decay": self.learning_rate_decay,
+#             "device": self.device
+#         }
+#         json_object = json.dumps(parameters, indent = 4)
+#         with open("dqn-trainer-data/" + self.folder + "/hyperparameters.json", "w") as outfile:
+#             outfile.write(json_object)
+
+
+#     def write_training_results(self, rewards) :
+#         with open("dqn-trainer-data/" + self.folder + '/training.csv', 'w') as csvfile:
+#             columns = ['total training runs', 'avg reward over last 100 training runs']
+#             writer = csv.DictWriter(csvfile, fieldnames = columns)
+#             writer.writeheader()
+#             writer.writerows(rewards)
+
+
+#     def write_params(self) :
+#         torch.save(self.model.state_dict(), "dqn-trainer-data/" + self.folder + "/parameters.torch")
+
+
+#     def write_success_rate(self, rate) :
+#         with open("dqn-trainer-data/" + self.folder + "/success_rate.txt", "w") as outfile:
+#             outfile.write(str(rate))
+#         self.env.close()
+#         self.write_training_results(rewards)
+
+#     # Agent
+
+#     def get_epsilon_greedy_action(self, qval):
+#         action = rand_action()
+#         if not (qval.max() <= 0 or torch.rand(1).item() < self.epsilon) :
+#             action = qval.argmax().item()
+#         return action
+
+
+#     def get_optimal_action(self, qval):
+#         return qval.argmax().item()
+
+
+#     def bellman_eq(self, action, reward, qval_now, state_next):
+#         qval_now_updated = qval
+#         # ??? some lines missing
+#         qval_now_updated[action] = reward + self.discount * max_qval_next
+#         return qval_now_updated
+#         self.write_training_results(rewards)
+
+
+#     def do_replay_memory(self, t):
+#         replays = random.sample(
+#             self.replay_memory,
+#             min( round( len(self.replay_memory)/5 ), self.minibatch_size )
+#         )
+#         for (state, action, reward, new_state, done) in replays:
+#             qval = self.model(state, self.map_tensor)
+#             new_qval = reward if done else self.bellman_eq(action, reward, qval, new_state)
+#             loss = self.loss_fn(qval, new_qval)
+#             self.optimizer.zero_grad()
+#             loss.backward()
+#             self.optimizer.step()
+#         if len(replays) == 0 :
+#         with open("dqn-trainer-data/" + self.folder + "/success_rate.txt", "w") as outfile:
+#             outfile.write(str(rate))
+
+# # states, actions, rewards, next_states, dones = self.sample_memory()
+
+# # indices = np.arange(self.batch_size)
+# # q_pred = self.q_net.forward(states)[indices, actions]
+# # q_next = self._get_qnext(next_states)
+
+# # q_next[dones] = 0.0
+# # q_target = rewards + self.gamma * q_next
+
+# # loss = self.q_net.loss(q_target, q_pred).to(self.q_net.device)
+# # loss.backward()
+# # self.q_net.optimizer.step()
+
+# ### MODEL ###
+
+# # model for 4x4 grids
+# class MyModel(nn.Module):
+#     def __init__(self):
+#         super(MyModel, self).__init__()
+#         self.my_nn = nn.Sequential(
+#              nn.Linear(17, 128),
+#              nn.ReLU(),
+#              nn.Linear(128, 32),
+#              nn.ReLU(),
+#              nn.Linear(32, 4)
+#         )
+
+#     def forward(self, state, lake_tensor):
+#         x = torch.cat((torch.as_tensor([state]), lake_tensor))
+#         x = self.my_nn(x)
+#         return x
+
+
+# ### MAIN ###
+
+# if __name__ == "__main__":
+
+#     param_dict = {
+#         "is_slippery" : True,
+#         "randomize_lake_map" : True,
+#         "fixed_start_and_goal" : True,
+#         "discount" : 0.9,
+#         "epsilon" : 0.05,
+#         "hundred_runs" : 10,
+#         "replay_memory_max_size" : 8192,
+#         "replay_regularity" : 20,
+#         "model" : MyModel(),
+#         "minibatch_size" : 128,
+#         "weight_decay": 1e-8,
+#         "learning_rate": 0.01,
+#         "learning_rate_decay": 0,
+#         "output_folder" : None
+#     }
+#     MyTrainer(**param_dict).run()

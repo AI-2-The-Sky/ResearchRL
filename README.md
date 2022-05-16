@@ -31,7 +31,7 @@ If you're interested in how the project is organized at a higher level, please c
 ## Our AI-2-The-Sky team :heart:
 
 Developers
-| [<img src="https://github.com/MrZalTy.png?size=85" width=85><br><sub>[Developer's name]</sub>](https://github.com/MrZalTy) | [<img src="https://github.com/MrZalTy.png?size=85" width=85><br><sub>[Developer's name]</sub>](https://github.com/MrZalTy) | [<img src="https://github.com/MrZalTy.png?size=85" width=85><br><sub>[Developer's name]</sub>](https://github.com/MrZalTy)
+| [<img src="https://github.com/STTR13.png?size=85" width=85><br><sub>[Developer's name]</sub>](https://github.com/STTR13) | [<img src="https://github.com/Guilhem-Sante.png?size=85" width=85><br><sub>[Developer's name]</sub>](https://github.com/Guilhem-Sante) | [<img src="https://github.com/Rnaock.png?size=85" width=85><br><sub>[Developer's name]</sub>](https://github.com/Rnaock)
 | :---: | :---: | :---: |
 
 Manager

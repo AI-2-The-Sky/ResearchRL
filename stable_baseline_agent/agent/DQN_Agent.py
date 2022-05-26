@@ -65,9 +65,9 @@ class NeuralNetwork(nn.Module):
 		_map, p1, p2 = x
 
 		map_features = self.map_net(_map)
-		p1_features = self.p1_net(torch.concat([_map, p1]))
-		p2_features = self.p2_net(torch.concat([_map, p2]))
-		return self.action_taker(torch.concat([map_features, p1_features, p2_features]))
+		p1_features = self.p1_net(torch.concat([map_features, p1], dim=1))
+		p2_features = self.p2_net(torch.concat([map_features, p2], dim=1))
+		return self.action_taker(torch.concat([map_features, p1_features, p2_features], dim=1))
 
 class BuffedDQNAgent(BaseAgent):
 	'''
@@ -81,8 +81,8 @@ class BuffedDQNAgent(BaseAgent):
 	def __init__(self, player_num: int) -> None:
 		super().__init__(player_num)
 
-		self.device = "cuda" if torch.cuda.is_alvaible() else "cpu"
-		self.brain = NeuralNetwork(len(tiles_watched), 5, defines.action_space).to(self.device)
+		self.device = "cuda" if torch.cuda.is_available() else "cpu"
+		self.brain = NeuralNetwork(len(tiles_watched), 5, len(defines.action_space)).to(self.device)
 
 
 	def _raw_state_to_input(self, state : State):
@@ -95,19 +95,22 @@ class BuffedDQNAgent(BaseAgent):
 		processed_map = torch.zeros(11, 11, 8, dtype=torch.float32).to(self.device)
 		for y, row in enumerate(_map):
 			for x, val in enumerate(row):
-				current = [0] * 8
+				current = [0] * len(tiles_watched)
 				current[tiles_watched[val]] = 1
 				processed_map[y][x] = torch.tensor(current)
-		processed_map = torch.unsqueeze(processed_map.permute(2, 0, 1))
+		processed_map = torch.unsqueeze(processed_map.permute(2, 0, 1), dim=0).to(self.device)
 		
 		# Then, split players in agent and opponent
 		agent, opponent = players_state[::-1] if players_state[0].enemy else players_state
-		agent = torch.unsqueeze(torch.tensor([agent.moveSpeed, agent.bombs, agent.bombRange, agent.x, agent.z]))
-		opponent = torch.unsqueeze(torch.tensor([opponent.moveSpeed, opponent.bombs, opponent.bombRange, opponent.x, opponent.z]))
+		agent = torch.tensor([agent.moveSpeed, agent.bombs, agent.bombRange, agent.x, agent.z]).reshape(1, -1).to(self.device)
+		opponent = torch.tensor([opponent.moveSpeed, opponent.bombs, opponent.bombRange, opponent.x, opponent.z]).reshape(1,-1).to(self.device)
 
 		return processed_map, agent, opponent
 
-	def get_action(self, state: State, train = False) -> t_action:
+	def get_action(self, state: State, train=False) -> t_action:
 		x = self._raw_state_to_input(state)
-
-		return (Random().choice(defines.move_space))
+		res = torch.argmax(self.brain(x))
+		if not train:
+			return res.cpu().detach().numpy().tolist()
+		else:
+			return res 

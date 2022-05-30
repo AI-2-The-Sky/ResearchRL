@@ -1,6 +1,7 @@
 from os import stat
+from turtle import st
 from bomberman.agents.BaseAgent		import BaseAgent
-from bomberman.states.State			import State
+from bomberman.states.State			import State, StatePlayer
 from bomberman.defines				import t_action
 from bomberman						import defines
 
@@ -8,6 +9,8 @@ from random import Random
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+
 import numpy as np
 
 from typing import Tuple
@@ -78,12 +81,22 @@ class BuffedDQNAgent(BaseAgent):
 	Some code is taken from https://github.com/hill-a/stable-baselines/blob/master/stable_baselines/deepq/dqn.py
 	'''
 	
-	def __init__(self, player_num: int) -> None:
+	def __init__(self, player_num: int, lr : float = 1e-3, gamma : float = 0.99) -> None:
 		super().__init__(player_num)
 
 		self.device = "cuda" if torch.cuda.is_available() else "cpu"
-		self.brain = NeuralNetwork(len(tiles_watched), 5, len(defines.action_space)).to(self.device)
 
+		self.action_space = len(defines.action_space)
+
+		self.brain = NeuralNetwork(len(tiles_watched), 5, self.action_space).to(self.device)
+
+		self.target_brain = NeuralNetwork(len(tiles_watched), 5, self.action_space).to(self.device)
+		self.target_brain.load_state_dict(self.brain.state_dict())
+		self.target_brain.eval()
+
+		self.optimizer = torch.optim.Adam(self.brain.parameters(), lr=lr);
+
+		self.gamma = gamma
 
 	def _raw_state_to_input(self, state : State):
 		'''
@@ -101,16 +114,54 @@ class BuffedDQNAgent(BaseAgent):
 		processed_map = torch.unsqueeze(processed_map.permute(2, 0, 1), dim=0).to(self.device)
 		
 		# Then, split players in agent and opponent
-		agent, opponent = players_state[::-1] if players_state[0].enemy else players_state
+		if len(players_state) == 2:
+			agent, opponent = players_state[::-1] if players_state[0].enemy else players_state
+		elif len(players_state) == 0:
+			agent, opponent = StatePlayer(), StatePlayer()
+		elif not players_state[0].enemy:
+			agent = players_state[0]
+			opponent = StatePlayer()
+		else:
+			opponent = players_state[0]
+			agent = StatePlayer()
+		
 		agent = torch.tensor([agent.moveSpeed, agent.bombs, agent.bombRange, agent.x, agent.z]).reshape(1, -1).to(self.device)
 		opponent = torch.tensor([opponent.moveSpeed, opponent.bombs, opponent.bombRange, opponent.x, opponent.z]).reshape(1,-1).to(self.device)
-
+		
 		return processed_map, agent, opponent
 
-	def get_action(self, state: State, train=False) -> t_action:
+	def update_model(self, data_point):
+		loss = self._compute_loss(data_point)
+
+		self.optimizer.zero_grad()
+		loss.backward()
+		self.optimizer.step()
+
+		return loss.item()
+
+	def _compute_loss(self, data_point):
+		state = self._raw_state_to_input(data_point["obs"])
+		next_state = self._raw_state_to_input(data_point["next_obs"])
+		action = torch.LongTensor(np.array(data_point["action"]).reshape(-1, 1)).to(self.device)
+		reward = torch.FloatTensor(np.array(data_point["reward"]).reshape(-1, 1)).to(self.device)
+		done = torch.FloatTensor(np.array(data_point["done"]).reshape(-1, 1)).to(self.device)
+
+		curr_q_value = self.brain(state).gather(1, action)
+		next_q_value = self.target_brain(next_state).max(dim=1, keepdim=True)[0].detach()
+		mask = 1 - done
+		target = (reward + self.gamma * next_q_value * mask)
+
+		loss = F.smooth_l1_loss(curr_q_value, target)
+
+		return loss
+
+	def _targe_hard_update(self):
+		self.target_brain.load_state_dict(self.brain.state_dict())
+
+	def get_action(self, state: State, epsilon=0) -> t_action:
+		if epsilon > np.random.random():
+			return np.random.choice(self.action_space)
+		
 		x = self._raw_state_to_input(state)
 		res = torch.argmax(self.brain(x))
-		if not train:
-			return res.cpu().detach().numpy().tolist()
-		else:
-			return res 
+		return res.cpu().detach().numpy().tolist()

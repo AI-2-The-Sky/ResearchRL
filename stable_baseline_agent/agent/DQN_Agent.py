@@ -86,7 +86,7 @@ class BuffedDQNAgent(BaseAgent):
 
 		self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
-		self.action_space = len(defines.action_space)
+		self.action_space = len(defines.move_space)
 
 		self.brain = NeuralNetwork(len(tiles_watched), 5, self.action_space).to(self.device)
 
@@ -147,9 +147,11 @@ class BuffedDQNAgent(BaseAgent):
 		done = torch.FloatTensor(np.array(data_point["done"]).reshape(-1, 1)).to(self.device)
 
 		curr_q_value = self.brain(state).gather(1, action)
-		next_q_value = self.target_brain(next_state).max(dim=1, keepdim=True)[0].detach()
+		next_q_value = self.target_brain(next_state).gather(  # Double DQN
+            1, self.brain(next_state).argmax(dim=1, keepdim=True)
+        ).detach()
 		mask = 1 - done
-		target = (reward + self.gamma * next_q_value * mask)
+		target = (reward + self.gamma * next_q_value * mask).to(self.device)
 
 		loss = F.smooth_l1_loss(curr_q_value, target)
 

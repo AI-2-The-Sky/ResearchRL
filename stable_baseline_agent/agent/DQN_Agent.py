@@ -17,8 +17,9 @@ from typing import Tuple
 
 tiles_watched = {k: i for i, k in enumerate(["B", "E", "W", "C", "r", "b", "s"," "])}
 
+
 class NeuralNetwork(nn.Module):
-	def __init__(self, tile_types : int, player_info : int, nb_action : int):
+	def __init__(self, tile_types : int, player_info : int, nb_action : int, hp : Dict[str, int]):
 		'''
 		tile_types: nb of tiles type (for one hot)
 		player_info: number of information per player
@@ -26,7 +27,7 @@ class NeuralNetwork(nn.Module):
 		'''
 		super().__init__()
 
-		
+
 		self.map_net = nn.Sequential(
 			nn.Conv2d(tile_types, 32, kernel_size=5),
 			nn.LeakyReLU(),
@@ -53,7 +54,7 @@ class NeuralNetwork(nn.Module):
 			nn.Linear(28, 16),
 			nn.LeakyReLU()
 		)
-
+		#TODO: evaluate opponent qval with the same net as the qval of the player
 
 		self.action_taker = nn.Sequential(
 			nn.Linear(64, 32),
@@ -72,6 +73,11 @@ class NeuralNetwork(nn.Module):
 		p2_features = self.p2_net(torch.concat([map_features, p2], dim=1))
 		return self.action_taker(torch.concat([map_features, p1_features, p2_features], dim=1))
 
+#class Hyperparam():
+# ...TODO
+# inspect(class) to get all class params
+
+
 class BuffedDQNAgent(BaseAgent):
 	'''
 	This is agent have these upgrades comparing to vanilla DQN :
@@ -80,7 +86,7 @@ class BuffedDQNAgent(BaseAgent):
 		- Prioritized Experience Replay
 	Some code is taken from https://github.com/hill-a/stable-baselines/blob/master/stable_baselines/deepq/dqn.py
 	'''
-	
+
 	def __init__(self, player_num: int, lr : float = 1e-3, gamma : float = 0.99) -> None:
 		super().__init__(player_num)
 
@@ -94,7 +100,7 @@ class BuffedDQNAgent(BaseAgent):
 		self.target_brain.load_state_dict(self.brain.state_dict())
 		self.target_brain.eval()
 
-		self.optimizer = torch.optim.Adam(self.brain.parameters(), lr=lr);
+		self.optimizer = torch.optim.Adam(self.brain.parameters(), lr=lr)
 
 		self.gamma = gamma
 
@@ -112,7 +118,7 @@ class BuffedDQNAgent(BaseAgent):
 				current[tiles_watched[val]] = 1
 				processed_map[y][x] = torch.tensor(current)
 		processed_map = torch.unsqueeze(processed_map.permute(2, 0, 1), dim=0).to(self.device)
-		
+
 		# Then, split players in agent and opponent
 		if len(players_state) == 2:
 			agent, opponent = players_state[::-1] if players_state[0].enemy else players_state
@@ -124,10 +130,10 @@ class BuffedDQNAgent(BaseAgent):
 		else:
 			opponent = players_state[0]
 			agent = StatePlayer()
-		
+
 		agent = torch.tensor([agent.moveSpeed, agent.bombs, agent.bombRange, agent.x, agent.z]).reshape(1, -1).to(self.device)
 		opponent = torch.tensor([opponent.moveSpeed, opponent.bombs, opponent.bombRange, opponent.x, opponent.z]).reshape(1,-1).to(self.device)
-		
+
 		return processed_map, agent, opponent
 
 	def update_model(self, data_point):
@@ -163,7 +169,7 @@ class BuffedDQNAgent(BaseAgent):
 	def get_action(self, state: State, epsilon=0) -> t_action:
 		if epsilon > np.random.random():
 			return np.random.choice(self.action_space)
-		
+
 		x = self._raw_state_to_input(state)
 		res = torch.argmax(self.brain(x))
 		return res.cpu().detach().numpy().tolist()

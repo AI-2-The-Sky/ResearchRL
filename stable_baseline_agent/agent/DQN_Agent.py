@@ -4,6 +4,7 @@ from bomberman.agents.BaseAgent		import BaseAgent
 from bomberman.states.State			import State, StatePlayer
 from bomberman.defines				import t_action
 from bomberman						import defines
+from dataclasses import dataclass
 
 from random import Random
 
@@ -19,74 +20,48 @@ from typing import Tuple
 tiles_watched = {k: i for i, k in enumerate(["B", "E", "W", "C", "r", "b", "s"," "])}
 
 
+@dataclass
 class Hyperparams():
-	def __init__(
-		self,
-		lr : float = 1e-3,
-		gamma : float = 0.99,
-		optimizer : str = "optim.Adam",
-		replay_buffer_size : int = 10000,
-		target_update_regularity : int = 100,
-		epsilon_decay : float = 1e-3,
-		max_epsilon : float = 0.8,
-        min_epsilon : float = 0.001,
-		# batch_size : int # might want to add this
-		reset_concurent_agent_each : int = 10
-		training_games_amount : int = 10
-		max_game_duration : int = 50
-		skip_frames : int = 4 # not clear what this is to me
+	lr : float = 1e-3
+	gamma : float = 0.99
+	optimizer : str = "optim.Adam"
+	replay_buffer_size : int = 10000
+	target_update_regularity : int = 100
+	epsilon_decay : float = 1e-3
+	max_epsilon : float = 0.8
+	min_epsilon : float = 0.001
+	# batch_size : int # might want to add this
+	reset_concurent_agent_each : int = 10
+	training_games_amount : int = 10
+	max_game_duration : int = 50
+	skip_frames : int = 4 # not clear what this is to me
 
-		# net
-		activation_function : str = "nn.LeakyReLu",
-		map_conv0_chanels : int = 32,
-		map_conv0_kernel_size : int = 5,
-		map_conv1_chanels : int = 64,
-		map_conv1_kernel_size : int = 3,
-		map_conv2_chanels : int = 64,
-		map_conv2_kernel_size : int = 3,
-		map_avg_pool_kernel_size : int = 3,
-		map_linear_chanels : int = 32,
-		p_linear0_chanels : int = 28,
-		p_linear1_chanels : int = 16,
-		act_linear0_chanels : int = 32,
-		act_linear1_chanels : int = 16,
+	# net
+	activation_function : str = "nn.LeakyReLu"
+	map_conv0_chanels : int = 32
+	map_conv0_kernel_size : int = 5
+	map_conv1_chanels : int = 64
+	map_conv1_kernel_size : int = 3
+	map_conv2_chanels : int = 64
+	map_conv2_kernel_size : int = 3
+	map_avg_pool_kernel_size : int = 3
+	map_linear_chanels : int = 32
+	p_linear0_chanels : int = 28
+	p_linear1_chanels : int = 16
+	act_linear0_chanels : int = 32
+	act_linear1_chanels : int = 16
 
-		# training techniques
-		# TODO : insert in the code @Quentin
-		double_dqn : bool = False,
-		dueling_learning : bool = False,
-		prioritized_experience_replay : bool = False,
+	# training techniques
+	# TODO : insert in the code @Quentin
+	double_dqn : bool = False
+	dueling_learning : bool = False
+	prioritized_experience_replay : bool = False
 
-	) :
-		self.player_amount = player_amount
-		self.lr = lr
-		self.gamma = gamma
-		self.optimizer = optimizer
-		self.replay_buffer_size = replay_buffer_size
-		self.target_update_regularity = target_update_regularity
-		self.epsilon_decay = epsilon_decay
-		self.max_epsilon = max_epsilon
-		self.min_epsilon = min_epsilon
-		self.reset_agent_each = reset_agent_each
-		self.training_games_amount = training_games_amount
-		self.max_game_duration = max_game_duration
-		self.skip_frames = skip_frames
-		self.activation_function = activation_function
-		self.map_conv0_chanels = map_conv0_chanels
-		self.map_conv0_kernel_size = map_conv0_kernel_size
-		self.map_conv1_chanels = map_conv1_chanels
-		self.map_conv1_kernel_size = map_conv1_kernel_size
-		self.map_conv2_chanels = map_conv2_chanels
-		self.map_conv2_kernel_size = map_conv2_kernel_size
-		self.map_avg_pool_kernel_size = map_avg_pool_kernel_size
-		self.map_linear_chanels = map_linear_chanels
-		self.p_linear0_chanels = p_linear0_chanels
-		self.p_linear1_chanels = p_linear1_chanels
-		self.act_linear0_chanels = act_linear0_chanels
-		self.act_linear1_chanels = act_linear1_chanels
-		self.double_dqn = double_dqn
-		self.dueling_learning = dueling_learning
-		self.prioritized_experience_replay = prioritized_experience_replay
+	# reward shaping
+	# win_reward : float
+	# lose_reward : float
+	# box_broken_reward : float
+	# ...
 
 # TODO : log in mlflow @Simon & @Manu
 # something like inspect(class) to get all class params

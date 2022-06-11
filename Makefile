@@ -1,14 +1,7 @@
-setup :
-	#
-
-build :
-	# docker build -t bomberman .
-
 run :
-	# docker run bomberman
+	python stable_baseline_agent/agent/train.py
 
-run-ExplosiveAI :
-	cd ExplosiveAI; python fight.py
+setup : install-python3.8 download-ExplosiveAI install-ExplosiveAI install-requirements
 
 install-python3.8 :
 	sudo apt-get install -y make build-essential libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev wget curl llvm libncurses5-dev libncursesw5-dev xz-utils tk-dev libffi-dev liblzma-dev python-openssl
@@ -32,3 +25,11 @@ install-ExplosiveAI :
 	cd ExplosiveAI; python3 -m pip install build
 	cd ExplosiveAI; python3 -m build
 	cd ExplosiveAI; python3 -m pip install dist/bomberman-0.1.0-py3-none-any.whl
+
+run-ExplosiveAI :
+	cd ExplosiveAI; python fight.py
+
+# docker-build :
+# 	# docker build -t bomberman .
+# docker-run :
+#	# docker run bomberman

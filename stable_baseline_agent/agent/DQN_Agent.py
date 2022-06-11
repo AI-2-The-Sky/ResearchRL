@@ -21,10 +21,10 @@ tiles_watched = {k: i for i, k in enumerate(["B", "E", "W", "C", "r", "b", "s","
 
 
 @dataclass
-class Hyperparams():
+class Hyperparams:
 	lr : float = 1e-3
 	gamma : float = 0.99
-	optimizer : str = "optim.Adam"
+	# optimizer : str = "optim.Adam"
 	replay_buffer_size : int = 10000
 	target_update_regularity : int = 100
 	epsilon_decay : float = 1e-3
@@ -37,7 +37,7 @@ class Hyperparams():
 	skip_frames : int = 4 # not clear what this is to me
 
 	# net
-	activation_function : str = "nn.LeakyReLu"
+	# activation_function : str = "nn.LeakyReLU"
 	map_conv0_chanels : int = 32
 	map_conv0_kernel_size : int = 5
 	map_conv1_chanels : int = 64
@@ -77,26 +77,26 @@ class NeuralNetwork(nn.Module):
 		'''
 		super().__init__()
 
-		activation_function = exec(hp.activation_function + "()")
+		# activation_function = exec(hp.activation_function + "()")
 
 		self.map_net = nn.Sequential(
 			nn.Conv2d(tile_types, hp.map_conv0_chanels, kernel_size=hp.map_conv0_kernel_size),
-			activation_function,
-			nn.Conv2d(hp.map_conv0_chanels, hp.map_conv1_chanels, kernel_size=hp.map_conv0_kernel_size),
-			activation_function,
-			nn.Conv2d(hp.map_conv1_chanels, hp.map_conv2_kernel_size, kernel_size=hp.map_conv2_chanels),
-			activation_function,
+			nn.LeakyReLU(),
+			nn.Conv2d(hp.map_conv0_chanels, hp.map_conv1_chanels, kernel_size=hp.map_conv1_kernel_size),
+			nn.LeakyReLU(),
+			nn.Conv2d(hp.map_conv1_chanels, hp.map_conv2_chanels, kernel_size=hp.map_conv2_kernel_size),
+			nn.LeakyReLU(),
 			nn.AvgPool2d(kernel_size=hp.map_avg_pool_kernel_size),
 			nn.Flatten(),
 			nn.Linear(hp.map_conv2_chanels, hp.map_linear_chanels),
-			activation_function,
+			nn.LeakyReLU(),
 		)
 
 		self.p_net = nn.Sequential(
 			nn.Linear(player_info + hp.map_linear_chanels, hp.p_linear0_chanels),
-			activation_function,
+			nn.LeakyReLU(),
 			nn.Linear(hp.p_linear0_chanels, hp.p_linear1_chanels),
-			activation_function
+			nn.LeakyReLU(),
 		)
 
 		# self.p2_net = nn.Sequential(
@@ -108,9 +108,9 @@ class NeuralNetwork(nn.Module):
 
 		self.action_taker = nn.Sequential(
 			nn.Linear(hp.map_linear_chanels + 2*hp.p_linear1_chanels, hp.act_linear0_chanels),
-			activation_function,
+			nn.LeakyReLU(),
 			nn.Linear(hp.act_linear0_chanels, hp.act_linear1_chanels),
-			activation_function,
+			nn.LeakyReLU(),
 			nn.Linear(hp.act_linear1_chanels, nb_action),
 			nn.Softmax()
 		)
@@ -136,11 +136,11 @@ class BuffedDQNAgent(BaseAgent):
 	'''
 
 	def __init__(self, player_num : int, hp : Hyperparams) -> None:
-		super().__init__(hp.player_num)
+		super().__init__(player_num)
 
 		self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
-		self.action_space = len(defines.action_space)
+		self.action_space = len(defines.move_space)
 
 		self.brain = NeuralNetwork(len(tiles_watched), 5, self.action_space, hp).to(self.device)
 
@@ -148,7 +148,8 @@ class BuffedDQNAgent(BaseAgent):
 		self.target_brain.load_state_dict(self.brain.state_dict())
 		self.target_brain.eval()
 
-		self.optimizer = exec(hp.optimizer + "(self.brain.parameters(), lr=hp.lr)")
+		#self.optimizer = exec(hp.optimizer + "(self.brain.parameters(), lr=hp.lr)")
+		self.optimizer = optim.Adam(self.brain.parameters(), lr=hp.lr)
 
 		self.hp = hp
 
@@ -171,13 +172,13 @@ class BuffedDQNAgent(BaseAgent):
 		if len(players_state) == 2:
 			agent, opponent = players_state[::-1] if players_state[0].enemy else players_state
 		elif len(players_state) == 0:
-			agent, opponent = StatePlayer(), StatePlayer()
+			agent, opponent = None, None # StatePlayer(), StatePlayer()
 		elif not players_state[0].enemy:
 			agent = players_state[0]
-			opponent = StatePlayer()
+			opponent = None # StatePlayer()
 		else:
 			opponent = players_state[0]
-			agent = StatePlayer()
+			agent = None # StatePlayer()
 
 		agent = torch.tensor([agent.moveSpeed, agent.bombs, agent.bombRange, agent.x, agent.z]).reshape(1, -1).to(self.device)
 		opponent = torch.tensor([opponent.moveSpeed, opponent.bombs, opponent.bombRange, opponent.x, opponent.z]).reshape(1,-1).to(self.device)
@@ -201,9 +202,11 @@ class BuffedDQNAgent(BaseAgent):
 		done = torch.FloatTensor(np.array(data_point["done"]).reshape(-1, 1)).to(self.device)
 
 		curr_q_value = self.brain(state).gather(1, action)
-		next_q_value = self.target_brain(next_state).max(dim=1, keepdim=True)[0].detach()
+		next_q_value = self.target_brain(next_state).gather(  # Double DQN
+												1, self.brain(next_state).argmax(dim=1, keepdim=True)
+								).detach()
 		mask = 1 - done
-		target = (reward + self.gamma * next_q_value * mask)
+		target = (reward + self.hp.gamma * next_q_value * mask).to(self.device)
 
 		loss = F.smooth_l1_loss(curr_q_value, target)
 

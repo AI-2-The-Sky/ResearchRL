@@ -4,3 +4,5 @@ stable_baseline_agent/agent/simulator
 node_modules/*
 package-lock.json
 *.pyc
+requirements.txt
+mlruns

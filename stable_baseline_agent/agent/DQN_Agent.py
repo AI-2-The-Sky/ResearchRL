@@ -40,7 +40,7 @@ class Hyperparams:
 
 	# net
 
-	# activation_function : str = "nn.LeakyReLU" 
+	# activation_function : str = "nn.LeakyReLU"
 	map_conv0_chanels : int = 32
 	map_conv0_kernel_size : int = 5
 	map_conv1_chanels : int = 64
@@ -173,13 +173,13 @@ class BuffedDQNAgent(BaseAgent):
 		if len(players_state) == 2:
 			agent, opponent = players_state[::-1] if players_state[0].enemy else players_state
 		elif len(players_state) == 0:
-			agent, opponent = StatePlayer(), StatePlayer()
+			agent, opponent = None, None # StatePlayer(), StatePlayer()
 		elif not players_state[0].enemy:
 			agent = players_state[0]
-			opponent = StatePlayer()
+			opponent = None # StatePlayer()
 		else:
 			opponent = players_state[0]
-			agent = StatePlayer()
+			agent = None # StatePlayer()
 
 		agent = torch.tensor([agent.moveSpeed, agent.bombs, agent.bombRange, agent.x, agent.z]).reshape(1, -1).to(self.device)
 		opponent = torch.tensor([opponent.moveSpeed, opponent.bombs, opponent.bombRange, opponent.x, opponent.z]).reshape(1,-1).to(self.device)

@@ -11,6 +11,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 from IPython.display import clear_output
 
+import mlflow
+import mlflow.pytorch
+
 import time
 
 
@@ -68,14 +71,14 @@ class Trainer():
         plt.plot(epsilons)
         plt.show()
 
-    def _mlflow_start():
+    def _mlflow_start(self):
         mlflow.start_run()
         mlflow.log_params(self.hp.__dict__)
 
-    def _mlflow_end():
+    def _mlflow_end(self):
         # tracking_url_type_store = urlparse(mlflow.get_tracking_uri()).scheme
         mlflow.pytorch.log_model(
-            pytorch_model=self.training_agent,
+            pytorch_model=self.training_agent.brain,
             artifact_path="mlflow/" + str(time.time()),
             conda_env=mlflow.pytorch.get_default_conda_env(),
             code_paths=[]  # TODO have list of code files here
@@ -83,6 +86,8 @@ class Trainer():
         mlflow.end_run()
 
     def train(self, log_each: int = 1):
+        self._mlflow_start()
+
         state_training, state_to_beat = self.reset()
         current_skip = self.hp.skip_frames
 
@@ -182,3 +187,5 @@ class Trainer():
             if i % log_each == 0:
                 print(f"{i} steps done")
             i += 1  # TODO : only update i when a step of training is done with the memory
+
+            self._mlflow_end()

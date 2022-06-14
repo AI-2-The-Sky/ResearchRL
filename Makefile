@@ -33,8 +33,14 @@ install-anaconda :
 run-ExplosiveAI :
 	cd ExplosiveAI; python fight.py
 
-docker-build :
+docker-build : docker-build-ExplosiveAI
 	docker build -t bomberman .
 
-docker-run :
-	docker run bomberman --name bomberman-run -v .:/ExplosiveAI -i
+docker-build-requirements :
+	docker build -t bomberman-requirements -f Dockerfile-requirements .
+
+docker-build-ExplosiveAI : docker-build-requirements
+	docker build -t bomberman-explosiveai -f Dockerfile-ExplosiveAI .
+
+docker-run : docker-build
+	docker run bomberman

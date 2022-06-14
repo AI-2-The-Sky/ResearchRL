@@ -1,0 +1,4 @@
+# from base image debian
+FROM python:3.8-bullseye
+
+RUN pip install torch wandb mlflow IPython

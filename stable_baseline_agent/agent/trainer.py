@@ -13,7 +13,6 @@ from IPython.display import clear_output
 
 import mlflow
 import mlflow.pytorch
-
 import wandb
 
 import time
@@ -92,12 +91,13 @@ class Trainer():
         self.mlflow_running = False
 
     def _wandb_init(self) :
+        wandb.login(key="<your-wandb-key>")
         wandb.init(project="bomberman")
         wandb.config = self.hp.__dict__
 
-    def train(self, log_each: int = 1, use_mlflow : bool = True, use_wandb : bool = True):
-        if use_mlflow : self._mlflow_start()
-        if use_wandb : self._wandb_init()
+    def train(self, log_each: int = 1, plot : bool = True, log_on_mlflow : bool = True, log_on_wandb : bool = True):
+        if log_on_mlflow : self._mlflow_start()
+        if log_on_wandb : self._wandb_init()
 
         state_training, state_to_beat = self.reset()
         current_skip = self.hp.skip_frames
@@ -120,8 +120,8 @@ class Trainer():
             data_point = {
                 "obs": state_training
             }  # need [obs, action, reward, next_obs, done]
-            if use_mlflow : mlflow.log_metric("epsilon", self.epsilon)
-            if use_wandb : wandb.log({"epsilon" : self.epsilon}, commit=False)
+            if log_on_mlflow : mlflow.log_metric("epsilon", self.epsilon)
+            if log_on_wandb : wandb.log({"epsilon" : self.epsilon}, commit=False)
 
             while current_skip > 0 and not game_over:
                 with torch.no_grad():  # Don't compute grad for game playing
@@ -160,8 +160,8 @@ class Trainer():
             data_point["done"] = game_over
 
             score += data_point["reward"]
-            if use_mlflow : mlflow.log_metric("score", score)
-            if use_wandb : wandb.log({"score" : score}, commit=False)
+            if log_on_mlflow : mlflow.log_metric("score", score)
+            if log_on_wandb : wandb.log({"score" : score}, commit=False)
 
             if game_over:
                 game_duration = 0
@@ -180,8 +180,8 @@ class Trainer():
                     sample = self.memory.sample_batch()
 
                     loss = self.training_agent.update_model(sample)
-                    if use_mlflow : mlflow.log_metric("loss", loss)
-                    if use_wandb : wandb.log({"loss" : loss}, commit=False)
+                    if log_on_mlflow : mlflow.log_metric("loss", loss)
+                    if log_on_wandb : wandb.log({"loss" : loss}, commit=False)
                     losses.append(loss)
 
                     update_count += 1
@@ -196,7 +196,7 @@ class Trainer():
 
                     epsilons.append(self.epsilon)
 
-            if update_count % log_each == 0:
+            if plot and update_count % log_each == 0:
                 self._plot(i, scores, losses, epsilons)
 
             if i % self.hp.reset_concurent_agent_each == 0:  # reset the to beat agent to the current trained agent
@@ -207,6 +207,6 @@ class Trainer():
                 print(f"{i} steps done")
             i += 1  # TODO : only update i when a step of training is done with the memory
 
-            if use_wandb : wandb.log({}, commit=True)
+            if log_on_wandb : wandb.log({}, commit=True)
 
-        if use_mlflow : self._mlflow_end()
+        if log_on_mlflow : self._mlflow_end()

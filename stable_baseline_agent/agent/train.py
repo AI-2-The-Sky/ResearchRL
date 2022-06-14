@@ -4,4 +4,4 @@ from trainer import Trainer
 
 trainer = Trainer(BuffedDQNAgent, Hyperparams())
 
-trainer.train()
+trainer.train(plot=False)

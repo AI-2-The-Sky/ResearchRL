@@ -5,8 +5,8 @@ setup : install-python3.8 download-ExplosiveAI install-ExplosiveAI install-requi
 
 install-python3.8 :
 	sudo apt-get install -y make build-essential libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev wget curl llvm libncurses5-dev libncursesw5-dev xz-utils tk-dev libffi-dev liblzma-dev python-openssl
-	curl https://pyenv.run | bash
-	~/.pyenv/bin/pyenv install 3.8.13
+	-curl https://pyenv.run | bash
+	-~/.pyenv/bin/pyenv install 3.8.13
 	~/.pyenv/bin/pyenv global 3.8.13
 
 install-requirements :
@@ -26,10 +26,15 @@ install-ExplosiveAI :
 	cd ExplosiveAI; python3 -m build
 	cd ExplosiveAI; python3 -m pip install dist/bomberman-0.1.0-py3-none-any.whl
 
+install-anaconda :
+	cd ~; curl https://repo.anaconda.com/archive/Anaconda3-2022.05-Linux-x86_64.sh > anaconda.sh
+	cd ~;
+
 run-ExplosiveAI :
 	cd ExplosiveAI; python fight.py
 
-# docker-build :
-# 	# docker build -t bomberman .
-# docker-run :
-#	# docker run bomberman
+docker-build :
+	docker build -t bomberman .
+
+docker-run :
+	docker run bomberman --name bomberman-run -v .:/ExplosiveAI -i

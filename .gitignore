@@ -6,3 +6,5 @@ package-lock.json
 *.pyc
 requirements.txt
 mlruns
+wandb
+simulator

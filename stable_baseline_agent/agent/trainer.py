@@ -14,6 +14,8 @@ from IPython.display import clear_output
 import mlflow
 import mlflow.pytorch
 
+import wandb
+
 import time
 
 
@@ -33,6 +35,8 @@ class Trainer():
 
         self.device = torch.device(
             "cuda" if torch.cuda.is_available() else "cpu")
+
+        self.mlflow_running = False
 
     def reset(self):
         # Player 1
@@ -74,6 +78,7 @@ class Trainer():
     def _mlflow_start(self):
         mlflow.start_run()
         mlflow.log_params(self.hp.__dict__)
+        self.mlflow_running = True
 
     def _mlflow_end(self):
         # tracking_url_type_store = urlparse(mlflow.get_tracking_uri()).scheme
@@ -84,9 +89,15 @@ class Trainer():
             code_paths=[]  # TODO have list of code files here
         )
         mlflow.end_run()
+        self.mlflow_running = False
 
-    def train(self, log_each: int = 1):
-        self._mlflow_start()
+    def _wandb_init(self) :
+        wandb.init(project="bomberman")
+        wandb.config = self.hp.__dict__
+
+    def train(self, log_each: int = 1, use_mlflow : bool = True, use_wandb : bool = True):
+        if use_mlflow : self._mlflow_start()
+        if use_wandb : self._wandb_init()
 
         state_training, state_to_beat = self.reset()
         current_skip = self.hp.skip_frames
@@ -109,9 +120,12 @@ class Trainer():
             data_point = {
                 "obs": state_training
             }  # need [obs, action, reward, next_obs, done]
+            if use_mlflow : mlflow.log_metric("epsilon", self.epsilon)
+            if use_wandb : wandb.log({"epsilon" : self.epsilon}, commit=False)
 
             while current_skip > 0 and not game_over:
                 with torch.no_grad():  # Don't compute grad for game playing
+                    # NOTE : why sleep?? @Quentin
                     time.sleep(0.01)
 
                     # To_beat_agent turn
@@ -146,6 +160,8 @@ class Trainer():
             data_point["done"] = game_over
 
             score += data_point["reward"]
+            if use_mlflow : mlflow.log_metric("score", score)
+            if use_wandb : wandb.log({"score" : score}, commit=False)
 
             if game_over:
                 game_duration = 0
@@ -156,6 +172,7 @@ class Trainer():
                       [2])  # only for debug TODO remove this line
                 state_training, state_to_beat = self.reset()
 
+
             self.memory.store(data_point)
 
             with torch.cuda.amp.autocast():
@@ -163,6 +180,8 @@ class Trainer():
                     sample = self.memory.sample_batch()
 
                     loss = self.training_agent.update_model(sample)
+                    if use_mlflow : mlflow.log_metric("loss", loss)
+                    if use_wandb : wandb.log({"loss" : loss}, commit=False)
                     losses.append(loss)
 
                     update_count += 1
@@ -188,4 +207,6 @@ class Trainer():
                 print(f"{i} steps done")
             i += 1  # TODO : only update i when a step of training is done with the memory
 
-            self._mlflow_end()
+            if use_wandb : wandb.log({}, commit=True)
+
+        if use_mlflow : self._mlflow_end()

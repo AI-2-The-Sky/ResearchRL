@@ -90,14 +90,15 @@ class Trainer():
         mlflow.end_run()
         self.mlflow_running = False
 
-    def _wandb_init(self) :
-        wandb.login(key="<your-wandb-key>")
+    def _wandb_init(self, wandb_login_key : str) :
+        wandb.login(key=wandb_login_key)
         wandb.init(project="bomberman")
         wandb.config = self.hp.__dict__
 
-    def train(self, log_each: int = 1, plot : bool = True, log_on_mlflow : bool = True, log_on_wandb : bool = True):
+    def train(self, log_each: int = 1, plot : bool = True, log_on_mlflow : bool = True, log_on_wandb : bool = True, wandb_login_key : str = None):
         if log_on_mlflow : self._mlflow_start()
-        if log_on_wandb : self._wandb_init()
+        if not wandb_login_key : log_on_wandb = False
+        if log_on_wandb : self._wandb_init(wandb_login_key)
 
         state_training, state_to_beat = self.reset()
         current_skip = self.hp.skip_frames

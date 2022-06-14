@@ -1,7 +1,8 @@
 # from base image debian
 FROM bomberman-requirements
 
-COPY /ExplosiveAI /ExplosiveAI
+COPY ExplosiveAI /ExplosiveAI
+COPY ExplosiveAI/simulator /ResearchRL/simulator
 
 WORKDIR /ExplosiveAI
 RUN chmod +x simulator/build/bomber.x86_64

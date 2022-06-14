@@ -1,7 +1,7 @@
 # from base image debian
 FROM bomberman-explosiveai
 
-COPY . /ResearchRL
+COPY stable_baseline_agent /ResearchRL/stable_baseline_agent
 
 WORKDIR /ResearchRL
 RUN rm -rf ExplosiveAI

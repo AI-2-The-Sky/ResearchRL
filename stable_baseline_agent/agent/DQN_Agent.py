@@ -4,10 +4,12 @@ from bomberman.agents.BaseAgent		import BaseAgent
 from bomberman.states.State			import State, StatePlayer
 from bomberman.defines				import t_action
 from bomberman						import defines
+from dataclasses import dataclass
 
 from random import Random
 
 import torch
+import torch.optim as optim
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -17,8 +19,57 @@ from typing import Tuple
 
 tiles_watched = {k: i for i, k in enumerate(["B", "E", "W", "C", "r", "b", "s"," "])}
 
+
+@dataclass
+class Hyperparams:
+	lr : float = 1e-3
+	gamma : float = 0.99
+	# optimizer : str = "optim.Adam"
+	replay_buffer_size : int = 10000
+	target_update_regularity : int = 100
+	epsilon_decay : float = 1e-3
+	max_epsilon : float = 0.8
+	min_epsilon : float = 0.001
+	# batch_size : int # might want to add this
+	reset_concurent_agent_each : int = 10
+	training_games_amount : int = 10
+	max_game_duration : int = 50
+	skip_frames : int = 4 # not clear what this is to me
+
+	# net
+	# activation_function : str = "nn.LeakyReLU"
+	map_conv0_chanels : int = 32
+	map_conv0_kernel_size : int = 5
+	map_conv1_chanels : int = 64
+	map_conv1_kernel_size : int = 3
+	map_conv2_chanels : int = 64
+	map_conv2_kernel_size : int = 3
+	map_avg_pool_kernel_size : int = 3
+	map_linear_chanels : int = 32
+	p_linear0_chanels : int = 28
+	p_linear1_chanels : int = 16
+	act_linear0_chanels : int = 32
+	act_linear1_chanels : int = 16
+
+	# training techniques
+	# TODO : insert in the code @Quentin
+	double_dqn : bool = False
+	dueling_learning : bool = False
+	prioritized_experience_replay : bool = False
+
+	# reward shaping
+	# win_reward : float
+	# lose_reward : float
+	# box_broken_reward : float
+	# ...
+
+# TODO : log in mlflow @Simon & @Manu
+# something like inspect(class) to get all class params
+
+
+
 class NeuralNetwork(nn.Module):
-	def __init__(self, tile_types : int, player_info : int, nb_action : int):
+	def __init__(self, tile_types : int, player_info : int, nb_action : int, hp : Hyperparams):
 		'''
 		tile_types: nb of tiles type (for one hot)
 		player_info: number of information per player
@@ -26,41 +77,41 @@ class NeuralNetwork(nn.Module):
 		'''
 		super().__init__()
 
-		
+		# activation_function = exec(hp.activation_function + "()")
+
 		self.map_net = nn.Sequential(
-			nn.Conv2d(tile_types, 32, kernel_size=5),
+			nn.Conv2d(tile_types, hp.map_conv0_chanels, kernel_size=hp.map_conv0_kernel_size),
 			nn.LeakyReLU(),
-			nn.Conv2d(32, 64, kernel_size=3),
+			nn.Conv2d(hp.map_conv0_chanels, hp.map_conv1_chanels, kernel_size=hp.map_conv1_kernel_size),
 			nn.LeakyReLU(),
-			nn.Conv2d(64, 64, kernel_size=3),
+			nn.Conv2d(hp.map_conv1_chanels, hp.map_conv2_chanels, kernel_size=hp.map_conv2_kernel_size),
 			nn.LeakyReLU(),
-			nn.AvgPool2d(kernel_size=3),
+			nn.AvgPool2d(kernel_size=hp.map_avg_pool_kernel_size),
 			nn.Flatten(),
-			nn.Linear(64, 32),
+			nn.Linear(hp.map_conv2_chanels, hp.map_linear_chanels),
 			nn.LeakyReLU(),
 		)
 
-		self.p1_net = nn.Sequential(
-			nn.Linear(player_info + 32, 28),
+		self.p_net = nn.Sequential(
+			nn.Linear(player_info + hp.map_linear_chanels, hp.p_linear0_chanels),
 			nn.LeakyReLU(),
-			nn.Linear(28, 16),
-			nn.LeakyReLU()
+			nn.Linear(hp.p_linear0_chanels, hp.p_linear1_chanels),
+			nn.LeakyReLU(),
 		)
 
-		self.p2_net = nn.Sequential(
-			nn.Linear(player_info + 32, 28),
-			nn.LeakyReLU(),
-			nn.Linear(28, 16),
-			nn.LeakyReLU()
-		)
-
+		# self.p2_net = nn.Sequential(
+		# 	nn.Linear(player_info + hp.map_linear_chanels, hp.p_linear0_chanels),
+		# 	activation_function,
+		# 	nn.Linear(hp.p_linear0_chanels, hp.p_linear1_chanels),
+		# 	activation_function
+		# )
 
 		self.action_taker = nn.Sequential(
-			nn.Linear(64, 32),
+			nn.Linear(hp.map_linear_chanels + 2*hp.p_linear1_chanels, hp.act_linear0_chanels),
 			nn.LeakyReLU(),
-			nn.Linear(32, 16),
+			nn.Linear(hp.act_linear0_chanels, hp.act_linear1_chanels),
 			nn.LeakyReLU(),
-			nn.Linear(16, nb_action),
+			nn.Linear(hp.act_linear1_chanels, nb_action),
 			nn.Softmax()
 		)
 
@@ -68,9 +119,12 @@ class NeuralNetwork(nn.Module):
 		_map, p1, p2 = x
 
 		map_features = self.map_net(_map)
-		p1_features = self.p1_net(torch.concat([map_features, p1], dim=1))
-		p2_features = self.p2_net(torch.concat([map_features, p2], dim=1))
+		p1_features = self.p_net(torch.concat([map_features, p1], dim=1))
+		# NOTE : same net for both players
+		p2_features = self.p_net(torch.concat([map_features, p2], dim=1))
 		return self.action_taker(torch.concat([map_features, p1_features, p2_features], dim=1))
+
+
 
 class BuffedDQNAgent(BaseAgent):
 	'''
@@ -80,23 +134,24 @@ class BuffedDQNAgent(BaseAgent):
 		- Prioritized Experience Replay
 	Some code is taken from https://github.com/hill-a/stable-baselines/blob/master/stable_baselines/deepq/dqn.py
 	'''
-	
-	def __init__(self, player_num: int, lr : float = 1e-3, gamma : float = 0.99) -> None:
+
+	def __init__(self, player_num : int, hp : Hyperparams) -> None:
 		super().__init__(player_num)
 
 		self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
 		self.action_space = len(defines.move_space)
 
-		self.brain = NeuralNetwork(len(tiles_watched), 5, self.action_space).to(self.device)
+		self.brain = NeuralNetwork(len(tiles_watched), 5, self.action_space, hp).to(self.device)
 
-		self.target_brain = NeuralNetwork(len(tiles_watched), 5, self.action_space).to(self.device)
+		self.target_brain = NeuralNetwork(len(tiles_watched), 5, self.action_space, hp).to(self.device)
 		self.target_brain.load_state_dict(self.brain.state_dict())
 		self.target_brain.eval()
 
-		self.optimizer = torch.optim.Adam(self.brain.parameters(), lr=lr);
+		#self.optimizer = exec(hp.optimizer + "(self.brain.parameters(), lr=hp.lr)")
+		self.optimizer = optim.Adam(self.brain.parameters(), lr=hp.lr)
 
-		self.gamma = gamma
+		self.hp = hp
 
 	def _raw_state_to_input(self, state : State):
 		'''
@@ -112,22 +167,22 @@ class BuffedDQNAgent(BaseAgent):
 				current[tiles_watched[val]] = 1
 				processed_map[y][x] = torch.tensor(current)
 		processed_map = torch.unsqueeze(processed_map.permute(2, 0, 1), dim=0).to(self.device)
-		
+
 		# Then, split players in agent and opponent
 		if len(players_state) == 2:
 			agent, opponent = players_state[::-1] if players_state[0].enemy else players_state
 		elif len(players_state) == 0:
-			agent, opponent = StatePlayer(), StatePlayer()
+			agent, opponent = None, None # StatePlayer(), StatePlayer()
 		elif not players_state[0].enemy:
 			agent = players_state[0]
-			opponent = StatePlayer()
+			opponent = None # StatePlayer()
 		else:
 			opponent = players_state[0]
-			agent = StatePlayer()
-		
+			agent = None # StatePlayer()
+
 		agent = torch.tensor([agent.moveSpeed, agent.bombs, agent.bombRange, agent.x, agent.z]).reshape(1, -1).to(self.device)
 		opponent = torch.tensor([opponent.moveSpeed, opponent.bombs, opponent.bombRange, opponent.x, opponent.z]).reshape(1,-1).to(self.device)
-		
+
 		return processed_map, agent, opponent
 
 	def update_model(self, data_point):
@@ -148,10 +203,10 @@ class BuffedDQNAgent(BaseAgent):
 
 		curr_q_value = self.brain(state).gather(1, action)
 		next_q_value = self.target_brain(next_state).gather(  # Double DQN
-            1, self.brain(next_state).argmax(dim=1, keepdim=True)
-        ).detach()
+												1, self.brain(next_state).argmax(dim=1, keepdim=True)
+								).detach()
 		mask = 1 - done
-		target = (reward + self.gamma * next_q_value * mask).to(self.device)
+		target = (reward + self.hp.gamma * next_q_value * mask).to(self.device)
 
 		loss = F.smooth_l1_loss(curr_q_value, target)
 
@@ -163,7 +218,7 @@ class BuffedDQNAgent(BaseAgent):
 	def get_action(self, state: State, epsilon=0) -> t_action:
 		if epsilon > np.random.random():
 			return np.random.choice(self.action_space)
-		
+
 		x = self._raw_state_to_input(state)
 		res = torch.argmax(self.brain(x))
 		return res.cpu().detach().numpy().tolist()

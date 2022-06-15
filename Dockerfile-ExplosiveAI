@@ -1,0 +1,11 @@
+# from base image debian
+FROM bomberman-requirements
+
+COPY ExplosiveAI /ExplosiveAI
+COPY ExplosiveAI/simulator /ResearchRL/simulator
+
+WORKDIR /ExplosiveAI
+RUN chmod +x simulator/build/bomber.x86_64
+RUN python3 -m pip install build
+RUN python3 -m build
+RUN python3 -m pip install dist/bomberman-0.1.0-py3-none-any.whl

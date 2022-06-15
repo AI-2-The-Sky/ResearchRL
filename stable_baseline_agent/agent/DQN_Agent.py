@@ -125,6 +125,32 @@ class NeuralNetwork(nn.Module):
 		return self.action_taker(torch.concat([map_features, p1_features, p2_features], dim=1))
 
 
+class DuellingNetwork(NeuralNetwork):
+	def __init__(self, tile_types: int, player_info: int, nb_action: int, hp: Hyperparams):
+		super().__init__(tile_types, player_info, nb_action, hp)
+
+		self.env_eval = nn.Sequential(
+			nn.Linear(hp.map_linear_chanels + 2*hp.p_linear1_chanels, hp.act_linear0_chanels),
+			nn.LeakyReLU(),
+			nn.Linear(hp.act_linear0_chanels, hp.act_linear1_chanels),
+			nn.LeakyReLU(),
+			nn.Linear(hp.act_linear1_chanels, 1),
+			nn.Softmax()
+		)
+
+	def forward(self, x : Tuple[torch.Tensor]):
+		_map, p1, p2 = x
+
+		map_features = self.map_net(_map)
+		p1_features = self.p_net(torch.concat([map_features, p1], dim=1))
+		# NOTE : same net for both players
+		p2_features = self.p_net(torch.concat([map_features, p2], dim=1))
+
+		actions_eval = self.action_taker(torch.concat([map_features, p1_features, p2_features], dim=1))
+		env_eval = self.env_eval(torch.concat([map_features, p1_features, p2_features], dim=1))
+		actions = env_eval + (actions_eval - actions_eval.mean(dim=1).view(-1,1))
+		return actions  
+
 
 class BuffedDQNAgent(BaseAgent):
 	'''
@@ -142,9 +168,11 @@ class BuffedDQNAgent(BaseAgent):
 
 		self.action_space = len(defines.move_space)
 
-		self.brain = NeuralNetwork(len(tiles_watched), 5, self.action_space, hp).to(self.device)
+		# self.brain = NeuralNetwork(len(tiles_watched), 5, self.action_space, hp).to(self.device)
+		self.brain = DuellingNetwork(len(tiles_watched), 5, self.action_space, hp).to(self.device)
 
-		self.target_brain = NeuralNetwork(len(tiles_watched), 5, self.action_space, hp).to(self.device)
+		# self.target_brain = NeuralNetwork(len(tiles_watched), 5, self.action_space, hp).to(self.device)
+		self.target_brain = DuellingNetwork(len(tiles_watched), 5, self.action_space, hp).to(self.device)
 		self.target_brain.load_state_dict(self.brain.state_dict())
 		self.target_brain.eval()
 

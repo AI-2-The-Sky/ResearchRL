@@ -1,9 +1,10 @@
 from DQN_Agent import BuffedDQNAgent, Hyperparams
 
 from trainer import Trainer
+import os
 
-# TODO : give your wandb login key
-wandb_login_key = None
+# read wandb api key from env variable
+wandb_login_key = os.environ['WANDB_API_KEY']
 
 trainer = Trainer(BuffedDQNAgent, Hyperparams())
 

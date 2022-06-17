@@ -47,6 +47,9 @@ docker-push : docker-build
 	docker push ${DOCKER_ID}/bomberman
 
 workstation-login :
+	### /!\ ###
+	# You need server authorisation for accessing the workstation: ask @jjauzion on 42AI slack
+	### /!\ ###
 	export WS_LOGIN_TOKEN=` \
 		curl 'http://54.77.14.151:8080/query' \
 			-X POST \
@@ -67,9 +70,16 @@ workstation-run : docker-push workstation-login
 		| jq '.' | cat
 
 workstation-list-tasks : workstation-login
+	### /!\ ###
+	# require env var: DOCKER_ID
+	### /!\ ###
 	curl 'http://54.77.14.151:8080/query' \
 		-X POST \
 		-H 'content-type: application/json' \
 		-H 'auth: ${WS_LOGIN_TOKEN}' \
 		--data '{"operationName":"list_my_tasks","variables":{"auth":"${WS_LOGIN_TOKEN}"},"query":"query list_my_tasks {\n  list_tasks {\n    id\n    created_at\n    started_at\n    ended_at\n    status\n    job {\n      docker_image\n      env\n    }\n  }\n}\n"}' \
-		| jq '.' | cat
+		> tmp.json
+	jq '.data.list_tasks[] | select(.job.docker_image == "${DOCKER_ID}/bomberman")' tmp.json \
+		|| jq '.' tmp.json \
+		| cat
+	rm -rf tmp.json
